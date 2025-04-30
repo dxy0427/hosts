@@ -1,14 +1,3 @@
-#!/bin/bash
-###############################################################################
-# Alist Manager Script
-# Version: 1.1.0
-# Last Updated: 2025-04-30
-# Description: Alpine Linux 下 Alist 管理脚本，支持安装、更新、卸载、密码重置等功能
-# Requirements: Alpine Linux (with Supervisor), root privileges, wget, tar
-# Author: 参考 v3.sh 优化，增强兼容性与用户体验
-###############################################################################
-
-# 全局变量
 DOWNLOAD_DIR="/opt/alist"
 ALIST_BINARY="$DOWNLOAD_DIR/alist"
 ALIST_SERVICE_FILE="/etc/init.d/alist"
