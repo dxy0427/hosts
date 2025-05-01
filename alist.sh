@@ -9,122 +9,79 @@ SUPERVISOR_CONF_DIR="/etc/supervisord_conf"
 SUPERVISOR_CONF_FILE="$SUPERVISOR_CONF_DIR/alist.ini"
 GREEN_COLOR="\033[32m"
 YELLOW_COLOR="\033[33m"
+RED_COLOR="\033[31m"
 RES="\033[0m"
 DATA_DIR="$DOWNLOAD_DIR/data"
 
-# 检查依赖
-check_dependencies() {
-    local dependencies="wget tar apk supervisord"
-    echo "当前 PATH 环境变量: $PATH"
+# 检查并安装依赖
+check_and_install_dependencies() {
+    local dependencies="wget tar supervisor curl"
+    echo "正在检查依赖项..."
     for dep in $dependencies; do
         if ! command -v $dep >/dev/null 2>&1; then
-            echo "错误: 缺少依赖 $dep，请安装。"
-            return 1
+            echo -e "${YELLOW_COLOR}缺少依赖: $dep，正在安装...${RES}"
+            apk add --no-cache "$dep"
+            if [ $? -ne 0 ]; then
+                echo -e "${RED_COLOR}安装依赖 $dep 失败，请检查网络连接或软件源。${RES}"
+                exit 1
+            fi
         fi
     done
-    return 0
+    echo -e "${GREEN_COLOR}所有依赖项已安装。${RES}"
 }
 
-# 获取下载链接（支持代理）
+# 获取 Alist 下载链接
 get_download_url() {
     local proxy="$1"
-    wget -q --no-check-certificate ${proxy:+"--proxy=$proxy"} -O- https://api.github.com/repos/alist-org/alist/releases/latest |
+    curl -s ${proxy:+"--proxy $proxy"} https://api.github.com/repos/alist-org/alist/releases/latest |
     grep -o '"browser_download_url": "[^"]*alist-linux-musl-amd64.tar.gz"' | cut -d'"' -f4
 }
 
-# 清理残留进程和配置
+# 清理残留文件和服务
 cleanup_residuals() {
-    # 终止残留的 Alist 进程
-    alist_pids=$(ps -ef | grep "$ALIST_BINARY server" | grep -v grep | awk '{print $2}')
-    if [ -n "$alist_pids" ]; then
-        kill -9 $alist_pids
-    fi
-    # 清理残留配置文件
+    echo "正在清理残留文件和配置..."
+    supervisorctl stop alist 2>/dev/null || true
     rm -f "$SUPERVISOR_CONF_FILE"
-    rm -rf ~/.alist
+    rm -rf "$DATA_DIR"
+    rm -f "$ALIST_BINARY"
+    echo "清理完成。"
 }
 
-# 获取当前版本号
-get_current_version() {
-    if [ -f "$ALIST_BINARY" ]; then
-        "$ALIST_BINARY" version 2>/dev/null || echo "未安装"
-    else
-        echo "未安装"
-    fi
-}
-
-# 获取最新版本号
-get_latest_version() {
-    local proxy="$1"
-    local latest=$(wget -q --no-check-certificate ${proxy:+"--proxy=$proxy"} -O- https://api.github.com/repos/alist-org/alist/releases/latest 2>/dev/null)
-    if [ -z "$latest" ]; then
-        echo "无法获取最新版本信息"
-    else
-        echo "$latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4
-    fi
-}
-
-# 比较版本号
-version_gt() {
-    test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1";
-}
-
-# 安装 Alist（选项1）
+# 安装 Alist
 install_alist() {
-    local current_version=$(get_current_version)
-    if [ "$current_version" = "未安装" ]; then
-        read -p "检查到未安装 Alist，是否进行安装？(y/n): " confirm
-        if [ "$confirm" != "y" ]; then
-            echo "安装操作已取消。"
-            return
-        fi
-    else
-        echo "Alist 已安装，当前版本为 $current_version。"
-        return
-    fi
-    cleanup_residuals
-    check_dependencies
-    if [ $? -ne 0 ]; then
-        return 1
-    fi
-    apk add supervisor wget tar --no-cache --no-interactive
+    check_and_install_dependencies
+    echo "开始安装 Alist..."
 
+    # 清理旧版本
+    cleanup_residuals
+
+    # 创建安装目录
     mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
+
+    # 获取下载链接
     echo -e "${GREEN_COLOR}输入 GitHub 代理（可选，格式：http://proxy:port）${RES}"
     read -p "代理地址: " proxy
     local url=$(get_download_url "$proxy")
     if [ -z "$url" ]; then
-        echo "获取链接失败"
-        return 1
+        echo -e "${RED_COLOR}获取 Alist 下载链接失败，请检查网络或代理设置。${RES}"
+        exit 1
     fi
 
+    # 下载并解压
+    echo "正在下载 Alist..."
     wget "$url" -O alist.tar.gz
     if [ $? -ne 0 ]; then
-        echo "下载失败"
-        return 1
+        echo -e "${RED_COLOR}下载失败，请检查网络连接。${RES}"
+        exit 1
     fi
+    echo "正在解压 Alist..."
     tar -zxvf alist.tar.gz && chmod +x "$ALIST_BINARY"
-
-    # 删除下载的临时文件
     rm -f alist.tar.gz
 
-    # 安装并配置 Supervisor
-    echo "正在设置 Supervisor 开机启动..."
+    # 配置 Supervisor
+    echo "正在配置 Supervisor..."
     rc-update add supervisord boot
-    echo "正在重启 Supervisor 服务..."
     service supervisord restart
-    echo "正在生成 Supervisor 配置文件..."
-    echo_supervisord_conf > /etc/supervisord.conf
-
-    # 编辑 Supervisor 配置
-    echo "正在更新 Supervisor 配置文件..."
-    cat << EOF >> /etc/supervisord.conf
-[include]
-files = $SUPERVISOR_CONF_DIR/*.ini
-EOF
-
-    # 创建并配置 alist 进程
-    echo "正在创建 Alist 进程配置文件..."
     mkdir -p "$SUPERVISOR_CONF_DIR"
     cat << EOF > "$SUPERVISOR_CONF_FILE"
 [program:alist]
@@ -132,235 +89,124 @@ directory=$DOWNLOAD_DIR
 command=$ALIST_BINARY server
 autostart=true
 autorestart=true
-environment=CODENATION_ENV=prod
+stderr_logfile=/var/log/alist.err.log
+stdout_logfile=/var/log/alist.out.log
 EOF
 
-    echo "正在启动 Supervisor 并启动 Alist 服务..."
+    # 启动服务
     supervisorctl reread
     supervisorctl update
     supervisorctl start alist
-    supervisorctl status alist
-    echo "Alist 安装完成。"
+    echo -e "${GREEN_COLOR}Alist 安装完成！${RES}"
 }
 
 # 更新 Alist
 update_alist() {
-    local current_version=$(get_current_version)
-    if [ "$current_version" = "未安装" ]; then
-        echo "Alist 未安装，无法进行更新。"
+    echo "正在检查 Alist 是否已安装..."
+    if [ ! -f "$ALIST_BINARY" ]; then
+        echo -e "${RED_COLOR}Alist 未安装，无法更新。${RES}"
         return
     fi
+
+    # 获取当前版本和最新版本
+    local proxy=""
     echo -e "${GREEN_COLOR}输入 GitHub 代理（可选，格式：http://proxy:port）${RES}"
     read -p "代理地址: " proxy
-    local latest_version=$(get_latest_version "$proxy")
-    if [ "$latest_version" = "无法获取最新版本信息" ]; then
-        echo "无法获取最新版本信息，更新操作取消。"
+    local latest_version=$(curl -s ${proxy:+"--proxy $proxy"} https://api.github.com/repos/alist-org/alist/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
+    local current_version=$("$ALIST_BINARY" version 2>/dev/null)
+
+    echo -e "${GREEN_COLOR}当前版本: ${current_version}${RES}"
+    echo -e "${YELLOW_COLOR}最新版本: ${latest_version}${RES}"
+
+    if [ "$current_version" = "$latest_version" ]; then
+        echo -e "${GREEN_COLOR}Alist 已是最新版本，无需更新。${RES}"
         return
     fi
-    if version_gt "$latest_version" "$current_version"; then
-        read -p "检测到新版本 $latest_version，当前版本为 $current_version，是否进行更新？(y/n): " confirm
-        if [ "$confirm" != "y" ]; then
-            echo "更新操作已取消。"
-            return
-        fi
-    else
-        echo "当前已是最新版本，无需更新。"
-        return
-    fi
+
+    echo "开始更新 Alist..."
     cleanup_residuals
-    echo "正在停止 Alist 服务..."
-    supervisorctl stop alist
-    echo "正在删除旧的 Alist 二进制文件..."
-    rm "$ALIST_BINARY"
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-    local url=$(get_download_url "$proxy")
-    if [ -z "$url" ]; then
-        echo "获取链接失败"
-        return 1
-    fi
-
-    wget "$url" -O alist.tar.gz
-    if [ $? -ne 0 ]; then
-        echo "下载失败"
-        return 1
-    fi
-    tar -zxvf alist.tar.gz && chmod +x "$ALIST_BINARY"
-
-    # 删除下载的临时文件
-    rm -f alist.tar.gz
-    echo "正在启动 Alist 服务..."
-    supervisorctl reread
-    supervisorctl update
-    supervisorctl start alist
-    echo "Alist 更新完成。"
+    install_alist
+    echo -e "${GREEN_COLOR}Alist 更新完成！${RES}"
 }
 
 # 卸载 Alist
 uninstall_alist() {
-    echo "警告：卸载操作将删除所有与 Alist 相关的数据，包括但不限于配置文件和存储的数据。"
-    read -p "你确定要卸载 Alist 并删除所有数据吗？(y/n): " confirm
+    echo "警告：卸载操作将删除所有数据和配置。"
+    read -p "确认卸载 Alist 吗？(y/n): " confirm
     if [ "$confirm" != "y" ]; then
         echo "卸载操作已取消。"
         return
     fi
     cleanup_residuals
-    echo "正在停止 Alist 服务..."
-    supervisorctl stop alist
-    echo "正在删除 Alist 二进制文件..."
-    rm "$ALIST_BINARY"
-    echo "正在删除 Alist 进程配置文件..."
-    rm -f "$SUPERVISOR_CONF_FILE"
-    echo "正在删除 data 目录..."
-    rm -rf "$DATA_DIR"
-    echo "正在从 Supervisor 中移除 Alist 配置..."
-    supervisorctl remove alist  # 确保 Supervisor 中不再包含 Alist 的配置
-    echo "Alist 卸载完成。"
+    supervisorctl remove alist 2>/dev/null || true
+    echo -e "${GREEN_COLOR}Alist 已成功卸载。${RES}"
 }
 
 # 重置管理员密码
 reset_password() {
-    local path="$DOWNLOAD_DIR"
-    cd "$path" || { echo "目录错误"; return; }
+    if [ ! -f "$ALIST_BINARY" ]; then
+        echo -e "${RED_COLOR}Alist 未安装，无法重置密码。${RES}"
+        return
+    fi
 
-    while true; do
-        echo -e "\n${GREEN_COLOR}5. 密码重置菜单${RES}"
-        echo "1. 生成随机密码"
-        echo "2. 设置自定义密码"
-        echo "0. 返回主菜单"
-        read -p "选择: " opt
+    echo "正在重置管理员密码..."
+    local output=$("$ALIST_BINARY" admin random 2>/dev/null)
+    if [ -z "$output" ]; then
+        echo -e "${RED_COLOR}重置密码失败，请检查 Alist 是否正常运行。${RES}"
+        return
+    fi
 
-        case $opt in
-            1)
-                echo "正在生成随机密码..."
-                output=$("$ALIST_BINARY" admin random 2>/dev/null)
-                
-                # 检查是否成功生成
-                if [ -z "$output" ]; then
-                    echo "生成随机密码失败，请检查 Alist 是否正常运行。"
-                    break
-                fi
-
-                # 提取账号和密码
-                username=$(echo "$output" | grep -oP '(?<=username: ).*')
-                password=$(echo "$output" | grep -oP '(?<=password: ).*')
-
-                # 显示账号和密码
-                if [ -n "$username" ] && [ -n "$password" ]; then
-                    echo "账号: $username"
-                    echo "密码: $password"
-                else
-                    echo "无法提取账号或密码，请检查输出格式："
-                    echo "$output"
-                fi
-                break
-                ;;
-            2)
-                read -p "新密码: " new_password
-                if [ -n "$new_password" ]; then
-                    "$ALIST_BINARY" admin set "$new_password" 2>/dev/null
-                    if [ $? -eq 0 ]; then
-                        echo "管理员密码设置成功！"
-                        supervisorctl restart alist
-                    else
-                        echo "设置密码失败，请检查 Alist 是否正常运行。"
-                    fi
-                else
-                    echo "密码不能为空，请重新输入。"
-                fi
-                break
-                ;;
-            0)
-                return
-                ;;
-            *)
-                echo "无效选项，请重新选择。"
-                ;;
-        esac
-    done
-    read -p "按回车返回主菜单..."
+    local username=$(echo "$output" | grep -oP '(?<=username: ).*')
+    local password=$(echo "$output" | grep -oP '(?<=password: ).*')
+    echo -e "${GREEN_COLOR}新账号: $username${RES}"
+    echo -e "${GREEN_COLOR}新密码: $password${RES}"
 }
 
-# 启动服务
+# 服务管理
 start_service() {
     echo "正在启动 Alist 服务..."
     supervisorctl start alist
-    supervisorctl status alist
-    echo "Alist 服务已启动。"
+    echo -e "${GREEN_COLOR}服务已启动。${RES}"
 }
 
-# 停止服务
 stop_service() {
     echo "正在停止 Alist 服务..."
     supervisorctl stop alist
-    echo "Alist 服务已停止。"
+    echo -e "${YELLOW_COLOR}服务已停止。${RES}"
 }
 
-# 重启服务
 restart_service() {
     echo "正在重启 Alist 服务..."
     supervisorctl restart alist
-    supervisorctl status alist
-    echo "Alist 服务已重启。"
-}
-
-# 检测版本信息
-check_version() {
-    local curr=$(get_current_version)
-    local proxy=""
-    echo -e "${GREEN_COLOR}输入 GitHub 代理（可选，格式：http://proxy:port）${RES}"
-    read -p "代理地址: " proxy
-    local latest=$(get_latest_version "$proxy")
-
-    echo -e "${GREEN_COLOR}当前版本: ${curr}${RES}"
-    echo -e "${YELLOW_COLOR}最新版本: ${latest}${RES}"
-    read -p "按回车返回主菜单..."
+    echo -e "${GREEN_COLOR}服务已重启。${RES}"
 }
 
 # 主菜单
-while true; do
-    echo "Alist 管理工具"
-    echo "1. 安装Alist"
-    echo "2. 更新Alist"
-    echo "3. 卸载Alist"
-    echo "4. 重置管理员密码"
-    echo "6. 启动服务"
-    echo "7. 停止服务"
-    echo "8. 重启服务"
-    echo "9. 检测版本信息"
-    echo "0. 退出脚本"
-    read -p "请输入你的选择: " choice
+main_menu() {
+    while true; do
+        echo -e "\n${GREEN_COLOR}Alist 管理工具${RES}"
+        echo "1. 安装 Alist"
+        echo "2. 更新 Alist"
+        echo "3. 卸载 Alist"
+        echo "4. 重置管理员密码"
+        echo "5. 启动服务"
+        echo "6. 停止服务"
+        echo "7. 重启服务"
+        echo "0. 退出"
+        read -p "请选择操作 [0-7]: " choice
+        case "$choice" in
+            1) install_alist ;;
+            2) update_alist ;;
+            3) uninstall_alist ;;
+            4) reset_password ;;
+            5) start_service ;;
+            6) stop_service ;;
+            7) restart_service ;;
+            0) echo "退出"; break ;;
+            *) echo -e "${RED_COLOR}无效选项，请重新输入。${RES}" ;;
+        esac
+    done
+}
 
-    case $choice in
-        1)
-            install_alist
-            ;;
-        2)
-            update_alist
-            ;;
-        3)
-            uninstall_alist
-            ;;
-        4)
-            reset_password
-            ;;
-        6)
-            start_service
-            ;;
-        7)
-            stop_service
-            ;;
-        8)
-            restart_service
-            ;;
-        9)
-            check_version
-            ;;
-        0)
-            echo "退出脚本"
-            break
-            ;;
-        *)
-            echo "无效的选择，请重新输入。"
-            ;;
-    esac
-done    
+# 程序入口
+main_menu
