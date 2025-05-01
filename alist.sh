@@ -231,18 +231,41 @@ reset_password() {
 
         case $opt in
             1)
-                output=$("$ALIST_BINARY" admin random)
-                username=$(echo "$output" | grep "username:" | awk -F ': ' '{print $2}')
-                password=$(echo "$output" | grep "password:" | awk -F ': ' '{print $2}')
-                echo "账号: $username"
-                echo "密码: $password"
+                echo "正在生成随机密码..."
+                output=$("$ALIST_BINARY" admin random 2>/dev/null)
+                
+                # 检查是否成功生成
+                if [ -z "$output" ]; then
+                    echo "生成随机密码失败，请检查 Alist 是否正常运行。"
+                    break
+                fi
+
+                # 提取账号和密码
+                username=$(echo "$output" | grep -oP '(?<=username: ).*')
+                password=$(echo "$output" | grep -oP '(?<=password: ).*')
+
+                # 显示账号和密码
+                if [ -n "$username" ] && [ -n "$password" ]; then
+                    echo "账号: $username"
+                    echo "密码: $password"
+                else
+                    echo "无法提取账号或密码，请检查输出格式："
+                    echo "$output"
+                fi
                 break
                 ;;
             2)
                 read -p "新密码: " new_password
                 if [ -n "$new_password" ]; then
-                    "$ALIST_BINARY" admin set "$new_password"
-                    supervisorctl restart alist
+                    "$ALIST_BINARY" admin set "$new_password" 2>/dev/null
+                    if [ $? -eq 0 ]; then
+                        echo "管理员密码设置成功！"
+                        supervisorctl restart alist
+                    else
+                        echo "设置密码失败，请检查 Alist 是否正常运行。"
+                    fi
+                else
+                    echo "密码不能为空，请重新输入。"
                 fi
                 break
                 ;;
@@ -250,7 +273,7 @@ reset_password() {
                 return
                 ;;
             *)
-                echo "无效选项"
+                echo "无效选项，请重新选择。"
                 ;;
         esac
     done
