@@ -212,9 +212,8 @@ uninstall_alist() {
     rm -f "$SUPERVISOR_CONF_FILE"
     echo "正在删除 data 目录..."
     rm -rf "$DATA_DIR"
-    echo "正在更新 Supervisor 配置..."
-    supervisorctl reread
-    supervisorctl update
+    echo "正在从 Supervisor 中移除 Alist 配置..."
+    supervisorctl remove alist  # 确保 Supervisor 中不再包含 Alist 的配置
     echo "Alist 卸载完成。"
 }
 
