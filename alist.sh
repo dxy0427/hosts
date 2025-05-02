@@ -15,29 +15,17 @@ DATA_DIR="$DOWNLOAD_DIR/data"
 
 # 检查依赖
 check_dependencies() {
+    local dependencies="wget tar apk supervisord"
     echo "当前 PATH 环境变量: $PATH"
-    local dependencies=("wget" "tar" "supervisor")
-    local install_commands=""
-    for dep in "${dependencies[@]}"; do
-        if! command -v $dep >/dev/null 2>&1; then
-            install_commands+=" apk add $dep"
-        fi
-    done
-
-    if [ -z "$install_commands" ]; then
-        echo "所有依赖已安装，无需操作。"
-    else
-        echo "检测到缺少依赖，尝试安装..."
-        apk update && eval "$install_commands"
-
-        for dep in "${dependencies[@]}"; do
-            if! command -v $dep >/dev/null 2>&1; then
-                echo "错误: 依赖 $dep 安装失败，请手动安装。"
+    for dep in $dependencies; do
+        if ! command -v $dep >/dev/null 2>&1; then
+            echo "错误: 缺少依赖 $dep，正在尝试安装..."
+            if ! apk add $dep; then
+                echo "错误: 安装 $dep 失败，请手动安装。"
                 return 1
             fi
-        done
-        echo "所有依赖安装成功。"
-    fi
+        fi
+    done
     return 0
 }
 
