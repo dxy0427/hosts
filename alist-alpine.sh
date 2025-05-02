@@ -1,4 +1,25 @@
+
 #!/bin/sh
+
+# 创建符号链接到 /usr/local/bin/
+SCRIPT_NAME="alist-alpine.sh"
+SYMLINK_PATH="/usr/local/bin/alist"
+if [ ! -L "$SYMLINK_PATH" ]; then
+    sudo ln -s "$(pwd)/$SCRIPT_NAME" "$SYMLINK_PATH"
+    if [ $? -ne 0 ]; then
+        echo "创建符号链接失败，请检查权限。"
+        exit 1
+    fi
+fi
+
+# 确保脚本可执行
+if [ ! -x "./$SCRIPT_NAME" ]; then
+    chmod +x "./$SCRIPT_NAME"
+    if [ $? -ne 0 ]; then
+        echo "设置脚本可执行权限失败，请检查权限。"
+        exit 1
+    fi
+fi
 
 # 定义变量
 ALIST_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/download"
@@ -165,6 +186,8 @@ EOF
     echo -e "${GREEN_COLOR}初始账号信息：${RES}"
     echo -e "${GREEN_COLOR}用户名: $ADMIN_USER${RES}"
     echo -e "${GREEN_COLOR}密码: $ADMIN_PASS${RES}"
+    read -p "按回车继续..."
+    clear
 }
 
 # 更新 Alist
@@ -172,6 +195,8 @@ update_alist() {
     local current_version=$(get_current_version)
     if [ "$current_version" = "未安装" ]; then
         echo "Alist 未安装，无法进行更新。"
+        read -p "按回车继续..."
+        clear
         return
     fi
     echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
@@ -190,6 +215,8 @@ update_alist() {
     local latest_version=$(get_latest_version "$proxy_input")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，更新操作取消。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -197,10 +224,14 @@ update_alist() {
         read -p "检测到新版本 $latest_version，当前版本为 $current_version，是否进行更新？(y/n): " confirm
         if [ "$confirm" != "y" ]; then
             echo "更新操作已取消。"
+            read -p "按回车继续..."
+            clear
             return
         fi
     else
         echo "当前已是最新版本，无需更新。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -221,6 +252,8 @@ update_alist() {
         echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -231,6 +264,8 @@ update_alist() {
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
         rm -f /tmp/alist.tar.gz
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -243,6 +278,8 @@ update_alist() {
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
         rm -f /tmp/alist.tar.gz
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -254,6 +291,8 @@ update_alist() {
     supervisorctl restart alist
 
     echo -e "${GREEN_COLOR}更新完成！${RES}"
+    read -p "按回车继续..."
+    clear
 }
 
 # 卸载 Alist
@@ -262,6 +301,8 @@ uninstall_alist() {
     read -p "你确定要卸载 Alist 并删除所有数据吗？(y/n): " confirm
     if [ "$confirm" != "y" ]; then
         echo "卸载操作已取消。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -309,9 +350,9 @@ uninstall_alist() {
     fi
 
     # 删除快捷键
-    if [ -f "/usr/local/bin/alist" ]; then
+    if [ -L "$SYMLINK_PATH" ]; then
         echo "正在删除快捷键..."
-        rm -f "/usr/local/bin/alist"
+        sudo rm -f "$SYMLINK_PATH"
     else
         echo "快捷键不存在，跳过删除操作。"
     fi
@@ -324,12 +365,16 @@ uninstall_alist() {
 # 查看状态
 check_status() {
     supervisorctl status alist
+    read -p "按回车继续..."
+    clear
 }
 
 # 重置密码
 reset_password() {
     if [ ! -f "$DOWNLOAD_DIR/alist" ]; then
         echo -e "\r\n${RED_COLOR}错误：系统未安装 Alist，请先安装！${RES}\r\n"
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -343,6 +388,8 @@ reset_password() {
     # 切换到 Alist 目录，并添加错误处理
     cd "$DOWNLOAD_DIR" || {
         echo -e "${RED_COLOR}错误：无法切换到 Alist 目录${RES}"
+        read -p "按回车继续..."
+        clear
         return 1
     }
 
@@ -362,6 +409,8 @@ reset_password() {
             read -p "请输入新密码: " new_password
             if [ -z "$new_password" ]; then
                 echo -e "${RED_COLOR}错误：密码不能为空${RES}"
+                read -p "按回车继续..."
+                clear
                 return 1
             fi
             echo -e "${GREEN_COLOR}正在设置新密码...${RES}"
@@ -375,14 +424,19 @@ reset_password() {
             echo -e "${GREEN_COLOR}密码: $password${RES}"
             ;;
         0)
+            read -p "按回车继续..."
+            clear
             return 0
             ;;
         *)
             echo -e "${RED_COLOR}无效的选项${RES}"
+            read -p "按回车继续..."
+            clear
             return 1
             ;;
     esac
-    read -p "按回车返回主菜单..."
+    read -p "按回车继续..."
+    clear
     return 0
 }
 
@@ -392,6 +446,8 @@ start_service() {
     supervisorctl start alist
     supervisorctl status alist
     echo "Alist 服务已启动。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 停止服务
@@ -399,6 +455,8 @@ stop_service() {
     echo "正在停止 Alist 服务..."
     supervisorctl stop alist
     echo "Alist 服务已停止。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 重启服务
@@ -407,6 +465,8 @@ restart_service() {
     supervisorctl restart alist
     supervisorctl status alist
     echo "Alist 服务已重启。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 检测版本信息
@@ -420,7 +480,8 @@ check_version() {
 
     echo -e "${GREEN_COLOR}当前版本: ${curr}${RES}"
     echo -e "${YELLOW_COLOR}最新版本: ${latest}${RES}"
-    read -p "按回车返回主菜单..."
+    read -p "按回车继续..."
+    clear
 }
 
 # 主菜单
