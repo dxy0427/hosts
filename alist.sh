@@ -19,12 +19,24 @@ check_dependencies() {
     echo "当前 PATH 环境变量: $PATH"
     for dep in $dependencies; do
         if ! command -v $dep >/dev/null 2>&1; then
-            echo "错误: 缺少依赖 $dep，请安装。"
-            return 1
+            echo "错误: 缺少依赖 $dep，请安装。尝试自动安装..."
+            if command -v apk >/dev/null 2>&1; then
+                sudo apk add --no-cache $dep
+                if command -v $dep >/dev/null 2>&1; then
+                    echo "成功安装依赖 $dep。"
+                else
+                    echo "自动安装依赖 $dep 失败，请手动安装。"
+                    return 1
+                fi
+            else
+                echo "无法自动安装，因为未找到 apk 包管理器，请手动安装依赖 $dep。"
+                return 1
+            fi
         fi
     done
     return 0
 }
+
 
 # 清理残留进程和配置
 cleanup_residuals() {
