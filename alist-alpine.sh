@@ -317,6 +317,8 @@ uninstall_alist() {
     fi
 
     echo "Alist 和相关配置已完全卸载。"
+    clear  # 清屏
+    exit 0 # 退出脚本
 }
 
 # 查看状态
@@ -472,4 +474,5 @@ while true; do
             echo "无效的选择，请重新输入。"
             ;;
     esac
-done    
+done
+    
