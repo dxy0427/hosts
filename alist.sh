@@ -264,7 +264,9 @@ uninstall_alist() {
         echo "卸载操作已取消。"
         return
     fi
+
     cleanup_residuals
+
     # 检查 Supervisor 是否正在运行
     if service supervisord status >/dev/null 2>&1; then
         echo "正在停止 Alist 服务..."
@@ -272,18 +274,22 @@ uninstall_alist() {
     else
         echo "Supervisor 未运行，跳过停止 Alist 服务。"
     fi
-    # 直接删除 Alist 安装目录
+
+    # 删除 Alist 安装目录
     if [ -d "$DOWNLOAD_DIR" ]; then
         echo "正在删除 Alist 安装目录..."
         rm -rf "$DOWNLOAD_DIR"
     else
         echo "Alist 安装目录不存在，跳过删除操作。"
     fi
+
     # 删除 Alist 进程配置文件
     rm -f "$SUPERVISOR_CONF_FILE"
+
     # 移除 /etc/supervisord.conf 中的 [include] 部分
     sed -i '/\[include\]/d' /etc/supervisord.conf
     sed -i '/files = \/etc\/supervisord_conf\/\*.ini/d' /etc/supervisord.conf
+
     # 检查 Supervisor 是否正在运行
     if service supervisord status >/dev/null 2>&1; then
         echo "正在更新 Supervisor 配置..."
@@ -292,7 +298,25 @@ uninstall_alist() {
     else
         echo "Supervisor 未运行，跳过更新配置。"
     fi
-    echo "Alist 卸载完成。"
+
+    # 删除脚本自身
+    SCRIPT_PATH=$(realpath "$0")
+    if [ -f "$SCRIPT_PATH" ]; then
+        echo "正在删除脚本自身..."
+        rm -f "$SCRIPT_PATH"
+    else
+        echo "脚本文件不存在，跳过删除操作。"
+    fi
+
+    # 删除快捷键
+    if [ -f "/usr/local/bin/alist" ]; then
+        echo "正在删除快捷键..."
+        rm -f "/usr/local/bin/alist"
+    else
+        echo "快捷键不存在，跳过删除操作。"
+    fi
+
+    echo "Alist 和相关配置已完全卸载。"
 }
 
 # 查看状态
