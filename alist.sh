@@ -1,4 +1,4 @@
-#!/bin/sh 
+#!/bin/sh
 
 # 定义变量
 ALIST_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/download"
