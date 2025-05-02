@@ -15,28 +15,31 @@ DATA_DIR="$DOWNLOAD_DIR/data"
 
 # 检查依赖
 check_dependencies() {
-    local dependencies="wget tar apk supervisor"
     echo "当前 PATH 环境变量: $PATH"
-    for dep in $dependencies; do
-        if ! command -v $dep >/dev/null 2>&1; then
-            echo "错误: 缺少依赖 $dep，请安装。尝试自动安装..."
-            if command -v apk >/dev/null 2>&1; then
-                sudo apk add --no-cache $dep
-                if command -v $dep >/dev/null 2>&1; then
-                    echo "成功安装依赖 $dep。"
-                else
-                    echo "自动安装依赖 $dep 失败，请手动安装。"
-                    return 1
-                fi
-            else
-                echo "无法自动安装，因为未找到 apk 包管理器，请手动安装依赖 $dep。"
-                return 1
-            fi
+    local dependencies=("wget" "tar" "supervisor")
+    local install_commands=""
+    for dep in "${dependencies[@]}"; do
+        if! command -v $dep >/dev/null 2>&1; then
+            install_commands+=" apk add $dep"
         fi
     done
+
+    if [ -z "$install_commands" ]; then
+        echo "所有依赖已安装，无需操作。"
+    else
+        echo "检测到缺少依赖，尝试安装..."
+        apk update && eval "$install_commands"
+
+        for dep in "${dependencies[@]}"; do
+            if! command -v $dep >/dev/null 2>&1; then
+                echo "错误: 依赖 $dep 安装失败，请手动安装。"
+                return 1
+            fi
+        done
+        echo "所有依赖安装成功。"
+    fi
     return 0
 }
-
 
 # 清理残留进程和配置
 cleanup_residuals() {
