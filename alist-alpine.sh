@@ -528,6 +528,8 @@ while true; do
             ;;
         0)
             echo "退出脚本"
+            read -p "按回车继续..."
+            clear  # 清屏
             break
             ;;
         *)
@@ -535,4 +537,3 @@ while true; do
             ;;
     esac
 done
-    
