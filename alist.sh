@@ -15,7 +15,7 @@ DATA_DIR="$DOWNLOAD_DIR/data"
 
 # 检查依赖
 check_dependencies() {
-    local dependencies="wget tar apk supervisord"
+    local dependencies="wget tar apk supervisor"
     echo "当前 PATH 环境变量: $PATH"
     for dep in $dependencies; do
         if ! command -v $dep >/dev/null 2>&1; then
