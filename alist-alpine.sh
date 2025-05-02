@@ -1,4 +1,3 @@
-
 #!/bin/sh
 
 # 创建符号链接到 /usr/local/bin/
