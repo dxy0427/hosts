@@ -120,25 +120,40 @@ install_alist() {
         echo "Alist 已安装，当前版本为 $current_version。"
         return
     fi
-
     cleanup_residuals
     check_dependencies
     if [ $? -ne 0 ]; then
         return 1
     fi
+    apk add supervisor wget tar --no-cache --no-interactive
 
-    # 检查并启动 Supervisor 服务
-    if ! pgrep supervisord >/dev/null 2>&1; then
-        echo "正在启动 Supervisor 服务..."
-        service supervisord start
-    else
-        echo "Supervisor 服务已在运行中。"
-    fi
+    # 清理残留的 Supervisor 配置
+    rm -f /etc/supervisord.conf
+    rm -rf /etc/supervisord_conf
+    rm -f /tmp/supervisor.sock
+
+    # 重新生成 Supervisor 配置文件
+    echo_supervisord_conf > /etc/supervisord.conf
+
+    # 编辑 Supervisor 配置
+    cat << EOF >> /etc/supervisord.conf
+[include]
+files = /etc/supervisord_conf/*.ini
+EOF
 
     mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
     echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
+    echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
+    echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
     read -p "请输入代理地址或直接按回车继续: " proxy_input
-    local GH_DOWNLOAD_URL="${proxy_input:-https://github.com/alist-org/alist/releases/latest/download}"
+    local GH_DOWNLOAD_URL
+    if [ -n "$proxy_input" ]; then
+        GH_DOWNLOAD_URL="${proxy_input}https://github.com/alist-org/alist/releases/latest/download"
+        echo -e "${GREEN_COLOR}已使用代理地址: $proxy_input${RES}"
+    else
+        GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
+        echo -e "${GREEN_COLOR}使用默认 GitHub 地址进行下载${RES}"
+    fi
 
     local url="${GH_DOWNLOAD_URL}/${ALIST_FILE}"
     wget "$url" -O alist.tar.gz
@@ -147,9 +162,18 @@ install_alist() {
         return 1
     fi
     tar -zxvf alist.tar.gz && chmod +x "$ALIST_BINARY"
+
+    # 删除下载的临时文件
     rm -f alist.tar.gz
 
-    # 配置 Supervisor 服务
+    # 安装并配置 Supervisor
+    echo "正在设置 Supervisor 开机启动..."
+    rc-update add supervisord boot
+    echo "正在重启 Supervisor 服务..."
+    service supervisord restart
+
+    # 创建并配置 alist 进程
+    echo "正在创建 Alist 进程配置文件..."
     mkdir -p "$SUPERVISOR_CONF_DIR"
     cat << EOF > "$SUPERVISOR_CONF_FILE"
 [program:alist]
@@ -160,29 +184,20 @@ autorestart=true
 environment=CODENATION_ENV=prod
 EOF
 
+    echo "正在启动 Supervisor 并启动 Alist 服务..."
     supervisorctl reread
     supervisorctl update
-    if ! supervisorctl status alist | grep -q "RUNNING"; then
-        supervisorctl start alist
-    else
-        echo "Alist 服务已在运行中。"
-    fi
-
+    supervisorctl start alist
+    supervisorctl status alist
     echo "Alist 安装完成。"
 
-    # 输出初始账号信息
+    # 获取初始账号密码
     ACCOUNT_INFO=$("$ALIST_BINARY" admin random 2>&1)
     ADMIN_USER=$(echo "$ACCOUNT_INFO" | grep "username:" | sed 's/.*username://')
     ADMIN_PASS=$(echo "$ACCOUNT_INFO" | grep "password:" | sed 's/.*password://')
     echo -e "${GREEN_COLOR}初始账号信息：${RES}"
     echo -e "${GREEN_COLOR}用户名: $ADMIN_USER${RES}"
     echo -e "${GREEN_COLOR}密码: $ADMIN_PASS${RES}"
-
-    # 保存初始账号到文件
-    echo "用户名: $ADMIN_USER" > "$DATA_DIR/initial_credentials.txt"
-    echo "密码: $ADMIN_PASS" >> "$DATA_DIR/initial_credentials.txt"
-    echo "初始账号信息已保存到 $DATA_DIR/initial_credentials.txt"
-
     read -p "按回车继续..."
     clear
 }
