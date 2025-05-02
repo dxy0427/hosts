@@ -1,5 +1,25 @@
 #!/bin/sh
 
+# 创建符号链接到 /usr/local/bin/
+SCRIPT_NAME="alist.sh"
+SYMLINK_PATH="/usr/local/bin/alist"
+if [ ! -L "$SYMLINK_PATH" ]; then
+    sudo ln -s "$(pwd)/$SCRIPT_NAME" "$SYMLINK_PATH"
+    if [ $? -ne 0 ]; then
+        echo "创建符号链接失败，请检查权限。"
+        exit 1
+    fi
+fi
+
+# 确保脚本可执行
+if [ ! -x "./$SCRIPT_NAME" ]; then
+    chmod +x "./$SCRIPT_NAME"
+    if [ $? -ne 0 ]; then
+        echo "设置脚本可执行权限失败，请检查权限。"
+        exit 1
+    fi
+fi
+
 # 定义变量
 ALIST_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/download"
 ALIST_FILE="alist-linux-musl-amd64.tar.gz"
@@ -12,17 +32,25 @@ YELLOW_COLOR="\033[33m"
 RED_COLOR="\033[31m"
 RES="\033[0m"
 DATA_DIR="$DOWNLOAD_DIR/data"
+CRON_JOB="0 4 * * * $(pwd)/$SCRIPT_NAME auto-update"
 
 # 检查依赖
 check_dependencies() {
-    local dependencies="wget tar apk supervisor"
+    local dependencies="wget tar apk supervisord"
     echo "当前 PATH 环境变量: $PATH"
     for dep in $dependencies; do
         if ! command -v $dep >/dev/null 2>&1; then
             echo "错误: 缺少依赖 $dep，正在尝试安装..."
-            if ! apk add $dep; then
-                echo "错误: 安装 $dep 失败，请手动安装。"
-                return 1
+            if [ "$dep" = "supervisord" ]; then
+                if ! apk add supervisor; then
+                    echo "错误: 安装 supervisor 失败，请手动安装。"
+                    return 1
+                fi
+            else
+                if ! apk add $dep; then
+                    echo "错误: 安装 $dep 失败，请手动安装。"
+                    return 1
+                fi
             fi
         fi
     done
@@ -165,6 +193,8 @@ EOF
     echo -e "${GREEN_COLOR}初始账号信息：${RES}"
     echo -e "${GREEN_COLOR}用户名: $ADMIN_USER${RES}"
     echo -e "${GREEN_COLOR}密码: $ADMIN_PASS${RES}"
+    read -p "按回车继续..."
+    clear
 }
 
 # 更新 Alist
@@ -172,6 +202,8 @@ update_alist() {
     local current_version=$(get_current_version)
     if [ "$current_version" = "未安装" ]; then
         echo "Alist 未安装，无法进行更新。"
+        read -p "按回车继续..."
+        clear
         return
     fi
     echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
@@ -190,6 +222,8 @@ update_alist() {
     local latest_version=$(get_latest_version "$proxy_input")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，更新操作取消。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -197,10 +231,14 @@ update_alist() {
         read -p "检测到新版本 $latest_version，当前版本为 $current_version，是否进行更新？(y/n): " confirm
         if [ "$confirm" != "y" ]; then
             echo "更新操作已取消。"
+            read -p "按回车继续..."
+            clear
             return
         fi
     else
         echo "当前已是最新版本，无需更新。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -221,6 +259,8 @@ update_alist() {
         echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -231,6 +271,8 @@ update_alist() {
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
         rm -f /tmp/alist.tar.gz
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -243,6 +285,8 @@ update_alist() {
         mv /tmp/alist.bak "$ALIST_BINARY"
         supervisorctl start alist
         rm -f /tmp/alist.tar.gz
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -254,6 +298,79 @@ update_alist() {
     supervisorctl restart alist
 
     echo -e "${GREEN_COLOR}更新完成！${RES}"
+    read -p "按回车继续..."
+    clear
+}
+
+# 自动更新 Alist
+auto_update_alist() {
+    local current_version=$(get_current_version)
+    if [ "$current_version" = "未安装" ]; then
+        echo "Alist 未安装，无法进行自动更新。"
+        return
+    fi
+    local proxy=""
+    local latest_version=$(get_latest_version "$proxy")
+    if [ "$latest_version" = "无法获取最新版本信息" ]; then
+        echo "无法获取最新版本信息，自动更新操作取消。"
+        return
+    fi
+
+    if version_gt "$latest_version" "$current_version"; then
+        echo -e "${GREEN_COLOR}检测到新版本 $latest_version，当前版本为 $current_version，开始自动更新...${RES}"
+
+        # 停止 Alist 服务
+        echo -e "${GREEN_COLOR}停止 Alist 进程${RES}\r\n"
+        supervisorctl stop alist
+
+        # 备份二进制文件
+        cp "$ALIST_BINARY" /tmp/alist.bak
+
+        # 下载新版本
+        local GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
+        echo -e "${GREEN_COLOR}下载 Alist ...${RES}"
+        wget "$GH_DOWNLOAD_URL/$ALIST_FILE" -O /tmp/alist.tar.gz
+        if [ $? -ne 0 ]; then
+            echo -e "${RED_COLOR}下载失败，自动更新终止${RES}"
+            echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
+            mv /tmp/alist.bak "$ALIST_BINARY"
+            supervisorctl start alist
+            return 1
+        fi
+
+        # 解压文件
+        if ! tar zxf /tmp/alist.tar.gz -C "$DOWNLOAD_DIR"; then
+            echo -e "${RED_COLOR}解压失败，自动更新终止${RES}"
+            echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
+            mv /tmp/alist.bak "$ALIST_BINARY"
+            supervisorctl start alist
+            rm -f /tmp/alist.tar.gz
+            return 1
+        fi
+
+        # 验证更新是否成功
+        if [ -f "$ALIST_BINARY" ]; then
+            echo -e "${GREEN_COLOR}下载成功，正在更新${RES}"
+        else
+            echo -e "${RED_COLOR}更新失败！${RES}"
+            echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
+            mv /tmp/alist.bak "$ALIST_BINARY"
+            supervisorctl start alist
+            rm -f /tmp/alist.tar.gz
+            return 1
+        fi
+
+        # 清理临时文件
+        rm -f /tmp/alist.tar.gz /tmp/alist.bak
+
+        # 重启 Alist 服务
+        echo -e "${GREEN_COLOR}启动 Alist 进程${RES}\r\n"
+        supervisorctl restart alist
+
+        echo -e "${GREEN_COLOR}自动更新完成！${RES}"
+    else
+        echo "当前已是最新版本，无需更新。"
+    fi
 }
 
 # 卸载 Alist
@@ -262,6 +379,8 @@ uninstall_alist() {
     read -p "你确定要卸载 Alist 并删除所有数据吗？(y/n): " confirm
     if [ "$confirm" != "y" ]; then
         echo "卸载操作已取消。"
+        read -p "按回车继续..."
+        clear
         return
     fi
 
@@ -309,25 +428,39 @@ uninstall_alist() {
     fi
 
     # 删除快捷键
-    if [ -f "/usr/local/bin/alist" ]; then
+    if [ -L "$SYMLINK_PATH" ]; then
         echo "正在删除快捷键..."
-        rm -f "/usr/local/bin/alist"
+        sudo rm -f "$SYMLINK_PATH"
     else
         echo "快捷键不存在，跳过删除操作。"
     fi
 
+    # 删除 cron 任务
+    crontab -l | grep -Ev "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update" | crontab -
+
     echo "Alist 和相关配置已完全卸载。"
+    clear  # 清屏
+    exit 0 # 退出脚本
 }
 
 # 查看状态
 check_status() {
     supervisorctl status alist
+    if crontab -l | grep -qE "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update"; then
+        echo "自动更新任务已开启，每天凌晨 4 点执行。"
+    else
+        echo "自动更新任务未开启。"
+    fi
+    read -p "按回车继续..."
+    clear
 }
 
 # 重置密码
 reset_password() {
     if [ ! -f "$DOWNLOAD_DIR/alist" ]; then
         echo -e "\r\n${RED_COLOR}错误：系统未安装 Alist，请先安装！${RES}\r\n"
+        read -p "按回车继续..."
+        clear
         return 1
     fi
 
@@ -341,6 +474,8 @@ reset_password() {
     # 切换到 Alist 目录，并添加错误处理
     cd "$DOWNLOAD_DIR" || {
         echo -e "${RED_COLOR}错误：无法切换到 Alist 目录${RES}"
+        read -p "按回车继续..."
+        clear
         return 1
     }
 
@@ -360,6 +495,8 @@ reset_password() {
             read -p "请输入新密码: " new_password
             if [ -z "$new_password" ]; then
                 echo -e "${RED_COLOR}错误：密码不能为空${RES}"
+                read -p "按回车继续..."
+                clear
                 return 1
             fi
             echo -e "${GREEN_COLOR}正在设置新密码...${RES}"
@@ -373,14 +510,19 @@ reset_password() {
             echo -e "${GREEN_COLOR}密码: $password${RES}"
             ;;
         0)
+            read -p "按回车继续..."
+            clear
             return 0
             ;;
         *)
             echo -e "${RED_COLOR}无效的选项${RES}"
+            read -p "按回车继续..."
+            clear
             return 1
             ;;
     esac
-    read -p "按回车返回主菜单..."
+    read -p "按回车继续..."
+    clear
     return 0
 }
 
@@ -390,6 +532,8 @@ start_service() {
     supervisorctl start alist
     supervisorctl status alist
     echo "Alist 服务已启动。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 停止服务
@@ -397,6 +541,8 @@ stop_service() {
     echo "正在停止 Alist 服务..."
     supervisorctl stop alist
     echo "Alist 服务已停止。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 重启服务
@@ -405,6 +551,8 @@ restart_service() {
     supervisorctl restart alist
     supervisorctl status alist
     echo "Alist 服务已重启。"
+    read -p "按回车继续..."
+    clear
 }
 
 # 检测版本信息
@@ -418,22 +566,97 @@ check_version() {
 
     echo -e "${GREEN_COLOR}当前版本: ${curr}${RES}"
     echo -e "${YELLOW_COLOR}最新版本: ${latest}${RES}"
-    read -p "按回车返回主菜单..."
+    read -p "按回车继续..."
+    clear
+}
+
+# 设置自动更新
+set_auto_update() {
+    read -p "是否开启每天凌晨 4 点自动更新？(y/n): " confirm
+    if [ "$confirm" = "y" ]; then
+        # 检查 cron 任务是否已存在
+        if crontab -l | grep -qE "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update"; then
+            echo "自动更新任务已存在，无需重复添加。"
+        else
+            # 添加 cron 任务
+            (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+            if [ $? -eq 0 ]; then
+                echo "已开启每天凌晨 4 点自动更新。"
+            else
+                echo "添加 cron 任务失败，请检查权限。"
+            fi
+        fi
+
+        # 检查当前时区
+        current_timezone=$(cat /etc/timezone 2>/dev/null)
+        if [ "$current_timezone" = "Asia/Shanghai" ]; then
+            echo "当前时区已经是 Asia/Shanghai，无需更改。"
+        else
+            # 设置时区
+            if apk add tzdata; then
+                if ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo "Asia/Shanghai" > /etc/timezone; then
+                    echo "已将系统时区设置为 Asia/Shanghai"
+                    # 显示当前时间
+                    date
+                else
+                    echo "设置时区软链接或写入时区文件失败。"
+                fi
+            else
+                echo "安装 tzdata 失败，请检查网络或权限。"
+            fi
+        fi
+    elif [ "$confirm" = "n" ]; then
+        # 检查 cron 任务是否存在
+        if crontab -l | grep -qE "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update"; then
+            echo "要删除的 cron 任务: $CRON_JOB"
+            # 保存当前 crontab 任务到临时文件
+            crontab -l > /tmp/crontab.tmp 2>/dev/null
+            if [ $? -ne 0 ]; then
+                echo "无法将 crontab 内容保存到临时文件，请检查权限。"
+                return
+            fi
+            # 简化正则表达式并过滤掉自动更新任务
+            grep -Ev "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update" /tmp/crontab.tmp > /tmp/crontab.filtered
+            if [ $? -ne 0 ]; then
+                echo "过滤 crontab 任务时出错。"
+                return
+            fi
+            # 打印过滤后的内容
+            echo "过滤后的 crontab 内容:"
+            cat /tmp/crontab.filtered
+            # 将过滤后的任务写回 crontab
+            crontab /tmp/crontab.filtered
+            if [ $? -eq 0 ]; then
+                echo "已关闭每天凌晨 4 点自动更新。"
+            else
+                echo "删除 cron 任务失败，请检查权限。"
+            fi
+            # 删除临时文件
+            rm -f /tmp/crontab.tmp /tmp/crontab.filtered
+        else
+            echo "自动更新任务不存在，无需删除。"
+        fi
+    else
+        echo "无效的选择，请输入 y 或 n。"
+    fi
+    read -p "按回车继续..."
+    clear
 }
 
 # 主菜单
 while true; do
     echo "Alist 管理工具"
-    echo "1. 安装Alist"
-    echo "2. 更新Alist"
-    echo "3. 卸载Alist"
-    echo "4. 查看状态"
-    echo "5. 重置密码"
-    echo "6. 启动服务"
-    echo "7. 停止服务"
-    echo "8. 重启服务"
-    echo "9. 检测版本信息"
-    echo "0. 退出脚本"
+    echo " 1. 安装Alist"
+    echo " 2. 更新Alist"
+    echo " 3. 卸载Alist"
+    echo " 4. 查看状态"
+    echo " 5. 重置密码"
+    echo " 6. 启动服务"
+    echo " 7. 停止服务"
+    echo " 8. 重启服务"
+    echo " 9. 检测版本信息"
+    echo "10. 设置自动更新"
+    echo " 0. 退出脚本"
     read -p "请输入你的选择: " choice
 
     case $choice in
@@ -464,12 +687,20 @@ while true; do
         9)
             check_version
             ;;
+        10)
+            set_auto_update
+            ;;
         0)
             echo "退出脚本"
+            clear  # 清屏
             break
             ;;
         *)
             echo "无效的选择，请重新输入。"
             ;;
     esac
-done    
+done
+
+if [ "$1" = "auto-update" ]; then
+    auto_update_alist
+fi    
