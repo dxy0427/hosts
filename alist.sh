@@ -46,7 +46,9 @@ cleanup_residuals() {
 # 获取当前版本号
 get_current_version() {
     if [ -f "$ALIST_BINARY" ]; then
-        "$ALIST_BINARY" version 2>/dev/null || echo "未安装"
+        local version_output="$($ALIST_BINARY version 2>/dev/null)"
+        local version=$(echo "$version_output" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        echo "${version:-未安装}"
     else
         echo "未安装"
     fi
