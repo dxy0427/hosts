@@ -36,22 +36,12 @@ CRON_JOB="0 4 * * * $(pwd)/$SCRIPT_NAME auto-update"
 
 # 检查依赖
 check_dependencies() {
-    local dependencies="wget tar apk supervisord"
+    local dependencies="wget tar apk supervisor curl"
     echo "当前 PATH 环境变量: $PATH"
     for dep in $dependencies; do
         if ! command -v $dep >/dev/null 2>&1; then
             echo "错误: 缺少依赖 $dep，正在尝试安装..."
-            if [ "$dep" = "supervisord" ]; then
-                if ! apk add supervisor; then
-                    echo "错误: 安装 supervisor 失败，请手动安装。"
-                    return 1
-                fi
-            else
-                if ! apk add $dep; then
-                    echo "错误: 安装 $dep 失败，请手动安装。"
-                    return 1
-                fi
-            fi
+            apk add $dep || { echo "错误: 安装 $dep 失败，请手动安装。"; return 1; }
         fi
     done
     return 0
