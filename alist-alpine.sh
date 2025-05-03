@@ -670,7 +670,18 @@ restart_service() {
     echo "Alist 服务已重启。"
     read -p "按回车继续..."
     clear
+    # 确保服务正在运行
+    if ! supervisorctl status alist | grep -q "RUNNING"; then
+        echo -e "${YELLOW_COLOR}检测到服务未运行，尝试启动服务...${RES}"
+        supervisorctl start alist
+        sleep 2
+        if ! supervisorctl status alist | grep -q "RUNNING"; then
+            echo -e "${RED_COLOR}服务启动失败，请检查日志${RES}"
+            return 1
+        fi
+    fi
 }
+
 
 # 检测版本信息
 check_version() {
