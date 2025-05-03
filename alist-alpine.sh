@@ -35,6 +35,21 @@ DATA_DIR="$DOWNLOAD_DIR/data"
 CRON_JOB="0 4 * * * $(pwd)/$SCRIPT_NAME auto-update"
 INSTALL_PATH="$DOWNLOAD_DIR"
 ARCH="amd64"
+if [ "$1" = "auto-update" ]; then
+    # 记录开始时间
+    start_time=$(date +%s)
+    
+    # 执行自动更新检查
+    auto_update_alist
+    
+    # 计算运行时间
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+    echo "自动更新检查完成，用时 ${duration} 秒"
+    
+    # 确保退出
+    exit 0
+fi
 
 # 检查依赖
 check_dependencies() {
