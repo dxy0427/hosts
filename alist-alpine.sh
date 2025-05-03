@@ -243,8 +243,14 @@ autorestart=true
 environment=CODENATION_ENV=prod
 EOF
 
-    # 重启 Supervisor 服务以应用新配置
-    echo "正在重启 Supervisor 服务..."
+    # 启动或重启 Supervisor 服务以应用新配置
+    echo "正在启动 Supervisor 服务..."
+    if ! supervisord -c /etc/supervisord.conf; then
+        echo -e "${RED_COLOR}启动 Supervisord 失败，请检查配置文件！${RES}"
+        return 1
+    fi
+
+    # 更新 Supervisor 配置
     supervisorctl reread
     supervisorctl update
 }
@@ -252,10 +258,13 @@ EOF
 # 安装成功提示
 SUCCESS() {
     clear  # 只在开始时清屏一次
+
     # 获取本地 IP
     LOCAL_IP=$(ip addr show | grep -w inet | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -n1)
+
     # 获取公网 IPv4
     PUBLIC_IPV4=$(curl -s4 ip.sb || curl -s4 ifconfig.me || echo "获取失败")
+
     # 获取公网 IPv6
     PUBLIC_IPV6=$(curl -s6 ip.sb 2>/dev/null || curl -s6 ifconfig.me 2>/dev/null || echo "获取失败")
 
@@ -265,10 +274,19 @@ SUCCESS() {
     echo "    公网 IPv4：http://${PUBLIC_IPV4}:5244/"
     echo "    公网 IPv6：http://[${PUBLIC_IPV6}]:5244/"
     echo "  配置文件：$INSTALL_PATH/data/config.json"
+
     if [ ! -z "$ADMIN_USER" ] && [ ! -z "$ADMIN_PASS" ]; then
         echo "  账号信息："
         echo "    默认账号：$ADMIN_USER"
         echo "    初始密码：$ADMIN_PASS"
+    fi
+
+    # 确保 supervisord 正常运行
+    if ! pgrep -x "supervisord" > /dev/null; then
+        echo -e "${YELLOW_COLOR}Supervisord 未运行，尝试启动...${RES}"
+        if ! supervisord -c /etc/supervisord.conf; then
+            echo -e "${RED_COLOR}启动 Supervisord 失败，请手动启动！${RES}"
+        fi
     fi
 
     # 安装命令行工具
@@ -279,9 +297,8 @@ SUCCESS() {
     echo -e "\n${GREEN_COLOR}启动服务中...${RES}"
     supervisorctl start alist
     echo -e "管理: 在任意目录输入 ${GREEN_COLOR}alist${RES} 打开管理菜单"
-
     echo -e "\n${YELLOW_COLOR}温馨提示：如果端口无法访问，请检查服务器安全组、防火墙和服务状态${RES}"
-    read -p "按回车返回主菜单..."
+    read -p "按回车返回主菜单..." 
     clear
 }
 
@@ -303,14 +320,16 @@ install_alist() {
         echo "Alist 已安装，当前版本为 $current_version。"
         return
     fi
+
     cleanup_residuals
     check_dependencies
     if [ $? -ne 0 ]; then
         return 1
     fi
+
     CHECK
     INSTALL
-    INIT
+    INIT  # 初始化 Supervisor 配置并启动 supervisord
     SUCCESS
 }
 
