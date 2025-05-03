@@ -74,9 +74,13 @@ get_current_version() {
     fi
 }
 
-# 获取最新版本号（移除代理参数，固定直连）
+# 获取最新版本号
 get_latest_version() {
+    local proxy="$1"
     local url="https://api.github.com/repos/alist-org/alist/releases/latest"
+    if [ -n "$proxy" ]; then
+        url="${proxy}${url}"
+    fi
     local latest=$(wget -q --no-check-certificate -O- "$url" 2>/dev/null)
     if [ -z "$latest" ]; then
         echo "无法获取最新版本信息"
@@ -99,13 +103,13 @@ CHECK() {
             echo -e "${RED_COLOR}错误：无法创建目录 $(dirname "$INSTALL_PATH")${RES}"
             exit 1
         }
-    }
+    fi
 
     # 检查是否已安装
     if [ -f "$INSTALL_PATH/alist" ]; then
         echo "此位置已经安装，请选择其他位置，或使用更新命令"
         exit 0
-    }
+    fi
 
     # 创建或清空安装目录
     if [ ! -d "$INSTALL_PATH/" ]; then
@@ -157,7 +161,7 @@ INSTALL() {
     # 保存当前目录
     CURRENT_DIR=$(pwd)
 
-    # 询问是否使用代理（下载时可选）
+    # 询问是否使用代理
     echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
     echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
     echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
@@ -298,7 +302,7 @@ install_alist() {
     else
         echo "Alist 已安装，当前版本为 $current_version。"
         return
-    }
+    fi
     cleanup_residuals
     check_dependencies
     if [ $? -ne 0 ]; then
@@ -318,15 +322,27 @@ update_alist() {
         read -p "按回车继续..."
         clear
         return
-    }
-    # 检查版本时不使用代理（get_latest_version 已固定直连）
-    local latest_version=$(get_latest_version)
+    fi
+    echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
+    echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
+    echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
+    read -p "请输入代理地址或直接按回车继续: " proxy_input
+    local GH_DOWNLOAD_URL
+    if [ -n "$proxy_input" ]; then
+        GH_DOWNLOAD_URL="${proxy_input}https://github.com/alist-org/alist/releases/latest/download"
+        echo -e "${GREEN_COLOR}已使用代理地址: $proxy_input${RES}"
+    else
+        GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
+        echo -e "${GREEN_COLOR}使用默认 GitHub 地址进行下载${RES}"
+    fi
+
+    local latest_version=$(get_latest_version "$proxy_input")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，更新操作取消。"
         read -p "按回车继续..."
         clear
         return
-    }
+    fi
 
     if version_gt "$latest_version" "$current_version"; then
         read -p "检测到新版本 $latest_version，当前版本为 $current_version，是否进行更新？(y/n): " confirm
@@ -341,7 +357,7 @@ update_alist() {
         read -p "按回车继续..."
         clear
         return
-    }
+    fi
 
     echo -e "${GREEN_COLOR}开始更新 Alist ...${RES}"
 
@@ -352,20 +368,7 @@ update_alist() {
     # 备份二进制文件
     cp "$ALIST_BINARY" /tmp/alist.bak
 
-    # 下载新版本（可选代理，逻辑保留）
-    echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
-    echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
-    echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
-    read -p "请输入代理地址或直接按回车继续: " proxy_input
-    local GH_DOWNLOAD_URL
-    if [ -n "$proxy_input" ]; then
-        GH_DOWNLOAD_URL="${proxy_input}https://github.com/alist-org/alist/releases/latest/download"
-        echo -e "${GREEN_COLOR}已使用代理地址: $proxy_input${RES}"
-    else
-        GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
-        echo -e "${GREEN_COLOR}使用默认 GitHub 地址进行下载${RES}"
-    fi
-
+    # 下载新版本
     echo -e "${GREEN_COLOR}下载 Alist ...${RES}"
     wget "$GH_DOWNLOAD_URL/$ALIST_FILE" -O /tmp/alist.tar.gz
     if [ $? -ne 0 ]; then
@@ -402,7 +405,7 @@ update_alist() {
         read -p "按回车继续..."
         clear
         return 1
-    }
+    fi
 
     # 清理临时文件
     rm -f /tmp/alist.tar.gz /tmp/alist.bak
@@ -423,9 +426,8 @@ auto_update_alist() {
         echo "Alist 未安装，无法进行自动更新。"
         return
     fi
-    # 检查版本时不使用代理（get_latest_version 已固定直连）
     local proxy=$(grep "^AUTO_UPDATE_PROXY=" /etc/environment | cut -d'=' -f2)
-    local latest_version=$(get_latest_version)
+    local latest_version=$(get_latest_version "$proxy")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，自动更新操作取消。"
         return
@@ -441,7 +443,7 @@ auto_update_alist() {
         # 备份二进制文件
         cp "$ALIST_BINARY" /tmp/alist.bak
 
-        # 下载新版本（使用配置的代理）
+        # 下载新版本
         local GH_DOWNLOAD_URL
         if [ -n "$proxy" ]; then
             GH_DOWNLOAD_URL="${proxy}https://github.com/alist-org/alist/releases/latest/download"
@@ -673,8 +675,11 @@ restart_service() {
 # 检测版本信息
 check_version() {
     local curr=$(get_current_version)
-    # 检查版本时不使用代理（直接调用无参数的 get_latest_version）
-    local latest=$(get_latest_version)
+    echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
+    echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
+    echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
+    read -p "请输入代理地址或直接按回车继续: " proxy_input
+    local latest=$(get_latest_version "$proxy_input")
 
     echo -e "${GREEN_COLOR}当前版本: ${curr}${RES}"
     echo -e "${YELLOW_COLOR}最新版本: ${latest}${RES}"
