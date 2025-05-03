@@ -74,7 +74,7 @@ get_current_version() {
     fi
 }
 
-# 获取最新版本号（修复正则表达式闭合问题）
+# 获取最新版本号
 get_latest_version() {
     local proxy="$1"
     local url="https://api.github.com/repos/alist-org/alist/releases/latest"
@@ -85,8 +85,7 @@ get_latest_version() {
     if [ -z "$latest" ]; then
         echo "无法获取最新版本信息"
     else
-        # 修正正则表达式，确保引号闭合并匹配版本格式
-        echo "$latest" | grep -oE '"tag_name": "v[0-9]+\.[0-9]+\.[0-9]+"' | cut -d'"' -f4
+        echo "$latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4
     fi
 }
 
@@ -279,7 +278,7 @@ SUCCESS() {
 
     echo -e "\n${GREEN_COLOR}启动服务中...${RES}"
     supervisorctl start alist
-    echo -e "管理: 在任意目录输入 ${GREEN_COLOR}alist${RES}"
+    echo -e "管理: 在任意目录输入 ${GREEN_COLOR}alist${RES} 打开管理菜单"
 
     echo -e "\n${YELLOW_COLOR}温馨提示：如果端口无法访问，请检查服务器安全组、防火墙和服务状态${RES}"
     read -p "按回车返回主菜单..."
@@ -425,13 +424,13 @@ auto_update_alist() {
     local current_version=$(get_current_version)
     if [ "$current_version" = "未安装" ]; then
         echo "Alist 未安装，无法进行自动更新。"
-        return 1
+        return
     fi
     local proxy=$(grep "^AUTO_UPDATE_PROXY=" /etc/environment | cut -d'=' -f2)
     local latest_version=$(get_latest_version "$proxy")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，自动更新操作取消。"
-        return 1
+        return
     fi
 
     if version_gt "$latest_version" "$current_version"; then
@@ -452,7 +451,8 @@ auto_update_alist() {
             GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
         fi
         echo -e "${GREEN_COLOR}下载 Alist ...${RES}"
-        if ! download_file "$GH_DOWNLOAD_URL/$ALIST_FILE" "/tmp/alist.tar.gz"; then
+        wget "$GH_DOWNLOAD_URL/$ALIST_FILE" -O /tmp/alist.tar.gz
+        if [ $? -ne 0 ]; then
             echo -e "${RED_COLOR}下载失败，自动更新终止${RES}"
             echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
             mv /tmp/alist.bak "$ALIST_BINARY"
@@ -490,10 +490,8 @@ auto_update_alist() {
         supervisorctl restart alist
 
         echo -e "${GREEN_COLOR}自动更新完成！${RES}"
-        return 0
     else
         echo "当前已是最新版本，无需更新。"
-        return 0
     fi
 }
 
@@ -698,11 +696,20 @@ set_auto_update() {
         echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
         echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
         read -p "请输入代理地址或直接按回车继续: " proxy_input
+        
+        # 处理环境变量（兼容无 /etc/environment 的系统）
         if [ -n "$proxy_input" ]; then
+            # 如果文件不存在，先创建（避免 sed 报错）
+            if [ ! -f /etc/environment ]; then
+                touch /etc/environment
+            fi
             echo "AUTO_UPDATE_PROXY=$proxy_input" | sudo tee -a /etc/environment > /dev/null
             echo -e "${GREEN_COLOR}已设置自动更新代理地址: $proxy_input${RES}"
         else
-            sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
+            # 删除环境变量时先检查文件是否存在
+            if [ -f /etc/environment ]; then
+                sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
+            fi
             echo -e "${GREEN_COLOR}未设置自动更新代理，使用默认地址进行更新${RES}"
         fi
 
@@ -768,7 +775,13 @@ set_auto_update() {
         else
             echo "自动更新任务不存在，无需删除。"
         fi
-        sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
+        # 删除环境变量时先检查文件是否存在
+        if [ -f /etc/environment ]; then
+            sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
+        else
+            # 若文件不存在，跳过删除（避免 sed 报错）
+            echo "提示：/etc/environment 文件不存在，无需删除代理配置。"
+        fi
     else
         echo "无效的选择，请输入 y 或 n。"
     fi
