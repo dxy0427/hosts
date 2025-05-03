@@ -833,3 +833,5 @@ while true; do
 done
 
 if [ "$1" = "auto-update" ]; then
+    exit 0
+fi
