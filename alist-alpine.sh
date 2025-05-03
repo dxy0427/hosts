@@ -319,14 +319,42 @@ update_alist() {
     local current_version=$(get_current_version)
     if [ "$current_version" = "未安装" ]; then
         echo "Alist 未安装，无法进行更新。"
-        read -p "按回车继续..."
+        read -p "按回车继续..." 
         clear
         return
     fi
+
+    # 检查是否有新版本
+    local latest_version=$(get_latest_version "")
+    if [ "$latest_version" = "无法获取最新版本信息" ]; then
+        echo "无法获取最新版本信息，更新操作取消。"
+        read -p "按回车继续..." 
+        clear
+        return
+    fi
+
+    if version_gt "$latest_version" "$current_version"; then
+        echo -e "${GREEN_COLOR}检测到新版本 $latest_version，当前版本为 $current_version${RES}"
+        read -p "是否进行更新？(y/n): " confirm
+        if [ "$confirm" != "y" ]; then
+            echo "更新操作已取消。"
+            read -p "按回车继续..." 
+            clear
+            return
+        fi
+    else
+        echo "当前已是最新版本，无需更新。"
+        read -p "按回车继续..." 
+        clear
+        return
+    fi
+
+    # 询问是否使用代理
     echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
     echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
     echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
     read -p "请输入代理地址或直接按回车继续: " proxy_input
+
     local GH_DOWNLOAD_URL
     if [ -n "$proxy_input" ]; then
         GH_DOWNLOAD_URL="${proxy_input}https://github.com/alist-org/alist/releases/latest/download"
@@ -335,30 +363,7 @@ update_alist() {
         GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
         echo -e "${GREEN_COLOR}使用默认 GitHub 地址进行下载${RES}"
     fi
-
-    local latest_version=$(get_latest_version "$proxy_input")
-    if [ "$latest_version" = "无法获取最新版本信息" ]; then
-        echo "无法获取最新版本信息，更新操作取消。"
-        read -p "按回车继续..."
-        clear
-        return
-    fi
-
-    if version_gt "$latest_version" "$current_version"; then
-        read -p "检测到新版本 $latest_version，当前版本为 $current_version，是否进行更新？(y/n): " confirm
-        if [ "$confirm" != "y" ]; then
-            echo "更新操作已取消。"
-            read -p "按回车继续..."
-            clear
-            return
-        fi
-    else
-        echo "当前已是最新版本，无需更新。"
-        read -p "按回车继续..."
-        clear
-        return
-    fi
-
+    
     echo -e "${GREEN_COLOR}开始更新 Alist ...${RES}"
 
     # 停止 Alist 服务
@@ -674,50 +679,64 @@ restart_service() {
 
 # 检测版本信息
 check_version() {
-    local curr=$(get_current_version)
-    echo -e "${GREEN_COLOR}是否使用 GitHub 代理？（默认无代理）${RES}"
-    echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
-    echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
-    read -p "请输入代理地址或直接按回车继续: " proxy_input
-    local latest=$(get_latest_version "$proxy_input")
+    local current_version=$(get_current_version)
+    local latest_version=$(get_latest_version "")
 
-    echo -e "${GREEN_COLOR}当前版本: ${curr}${RES}"
-    echo -e "${YELLOW_COLOR}最新版本: ${latest}${RES}"
-    read -p "按回车继续..."
+    echo -e "${GREEN_COLOR}当前版本: ${current_version}${RES}"
+    echo -e "${YELLOW_COLOR}最新版本: ${latest_version}${RES}"
+
+    if version_gt "$latest_version" "$current_version"; then
+        echo -e "${YELLOW_COLOR}有新版本可用！建议更新到最新版本。${RES}"
+    else
+        echo -e "${GREEN_COLOR}当前已是最新版本。${RES}"
+    fi
+
+    read -p "按回车继续..." 
     clear
 }
 
 # 设置自动更新
 set_auto_update() {
+    # 检查是否有新版本（仅作为提示，不影响自动更新设置）
+    local current_version=$(get_current_version)
+    local latest_version=$(get_latest_version "")
+
+    if [ "$latest_version" = "无法获取最新版本信息" ]; then
+        echo "无法获取最新版本信息，但可以继续设置自动更新。"
+    fi
+
+    if version_gt "$latest_version" "$current_version"; then
+        echo -e "${YELLOW_COLOR}检测到有新版本可用，建议开启自动更新。${RES}"
+    else
+        echo -e "${GREEN_COLOR}当前已是最新版本，但仍可开启自动更新以备后续更新。${RES}"
+    fi
+
     read -p "是否开启每天凌晨 4 点自动更新？(y/n): " confirm
     if [ "$confirm" = "y" ]; then
-        # 询问是否使用代理
+        # 检查是否需要代理
+        local proxy_input=""
         echo -e "${GREEN_COLOR}是否使用 GitHub 代理进行自动更新？（默认无代理）${RES}"
         echo -e "${GREEN_COLOR}代理地址必须为 https 开头，斜杠 / 结尾 ${RES}"
         echo -e "${GREEN_COLOR}例如：https://ghproxy.com/ ${RES}"
         read -p "请输入代理地址或直接按回车继续: " proxy_input
-        
-        # 处理环境变量（兼容无 /etc/environment 的系统）
+
         if [ -n "$proxy_input" ]; then
-            # 如果文件不存在，先创建（避免 sed 报错）
             if [ ! -f /etc/environment ]; then
                 touch /etc/environment
             fi
             echo "AUTO_UPDATE_PROXY=$proxy_input" | sudo tee -a /etc/environment > /dev/null
             echo -e "${GREEN_COLOR}已设置自动更新代理地址: $proxy_input${RES}"
         else
-            # 删除环境变量时先检查文件是否存在
             if [ -f /etc/environment ]; then
                 sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
             fi
             echo -e "${GREEN_COLOR}未设置自动更新代理，使用默认地址进行更新${RES}"
         fi
 
-        # 检查 cron 任务是否已存在
+        # 添加 cron 任务
         if crontab -l | grep -qE "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update"; then
             echo "自动更新任务已存在，无需重复添加。"
         else
-            # 添加 cron 任务
             (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
             if [ $? -eq 0 ]; then
                 echo "已开启每天凌晨 4 点自动更新。"
@@ -726,16 +745,14 @@ set_auto_update() {
             fi
         fi
 
-        # 检查当前时区
+        # 检查时区
         current_timezone=$(cat /etc/timezone 2>/dev/null)
         if [ "$current_timezone" = "Asia/Shanghai" ]; then
             echo "当前时区已经是 Asia/Shanghai，无需更改。"
         else
-            # 设置时区
             if apk add tzdata; then
                 if ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo "Asia/Shanghai" > /etc/timezone; then
                     echo "已将系统时区设置为 Asia/Shanghai"
-                    # 显示当前时间
                     date
                 else
                     echo "设置时区软链接或写入时区文件失败。"
@@ -745,47 +762,28 @@ set_auto_update() {
             fi
         fi
     elif [ "$confirm" = "n" ]; then
-        # 检查 cron 任务是否存在
         if crontab -l | grep -qE "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update"; then
-            echo "要删除的 cron 任务: $CRON_JOB"
-            # 保存当前 crontab 任务到临时文件
             crontab -l > /tmp/crontab.tmp 2>/dev/null
-            if [ $? -ne 0 ]; then
-                echo "无法将 crontab 内容保存到临时文件，请检查权限。"
-                return
-            fi
-            # 简化正则表达式并过滤掉自动更新任务
             grep -Ev "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update" /tmp/crontab.tmp > /tmp/crontab.filtered
-            if [ $? -ne 0 ]; then
-                echo "过滤 crontab 任务时出错。"
-                return
-            fi
-            # 打印过滤后的内容
-            echo "过滤后的 crontab 内容:"
-            cat /tmp/crontab.filtered
-            # 将过滤后的任务写回 crontab
             crontab /tmp/crontab.filtered
             if [ $? -eq 0 ]; then
                 echo "已关闭每天凌晨 4 点自动更新。"
             else
                 echo "删除 cron 任务失败，请检查权限。"
             fi
-            # 删除临时文件
             rm -f /tmp/crontab.tmp /tmp/crontab.filtered
         else
             echo "自动更新任务不存在，无需删除。"
         fi
-        # 删除环境变量时先检查文件是否存在
+
         if [ -f /etc/environment ]; then
             sudo sed -i '/^AUTO_UPDATE_PROXY=/d' /etc/environment
-        else
-            # 若文件不存在，跳过删除（避免 sed 报错）
-            echo "提示：/etc/environment 文件不存在，无需删除代理配置。"
         fi
     else
         echo "无效的选择，请输入 y 或 n。"
     fi
-    read -p "按回车继续..."
+
+    read -p "按回车继续..." 
     clear
 }
 
