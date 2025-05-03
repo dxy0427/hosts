@@ -35,21 +35,6 @@ DATA_DIR="$DOWNLOAD_DIR/data"
 CRON_JOB="0 4 * * * $(pwd)/$SCRIPT_NAME auto-update"
 INSTALL_PATH="$DOWNLOAD_DIR"
 ARCH="amd64"
-if [ "$1" = "auto-update" ]; then
-    # 记录开始时间
-    start_time=$(date +%s)
-    
-    # 执行自动更新检查
-    auto_update_alist
-    
-    # 计算运行时间
-    end_time=$(date +%s)
-    duration=$((end_time - start_time))
-    echo "自动更新检查完成，用时 ${duration} 秒"
-    
-    # 确保退出
-    exit 0
-fi
 
 # 检查依赖
 check_dependencies() {
@@ -89,7 +74,7 @@ get_current_version() {
     fi
 }
 
-# 获取最新版本号
+# 获取最新版本号（修复正则表达式闭合问题）
 get_latest_version() {
     local proxy="$1"
     local url="https://api.github.com/repos/alist-org/alist/releases/latest"
@@ -100,7 +85,8 @@ get_latest_version() {
     if [ -z "$latest" ]; then
         echo "无法获取最新版本信息"
     else
-        echo "$latest" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4
+        # 修正正则表达式，确保引号闭合并匹配版本格式
+        echo "$latest" | grep -oE '"tag_name": "v[0-9]+\.[0-9]+\.[0-9]+"' | cut -d'"' -f4
     fi
 }
 
@@ -293,7 +279,7 @@ SUCCESS() {
 
     echo -e "\n${GREEN_COLOR}启动服务中...${RES}"
     supervisorctl start alist
-    echo -e "管理: 在任意目录输入 ${GREEN_COLOR}alist${RES} 打开管理菜单"
+    echo -e "管理: 在任意目录输入 ${GREEN_COLOR}alist${RES}"
 
     echo -e "\n${YELLOW_COLOR}温馨提示：如果端口无法访问，请检查服务器安全组、防火墙和服务状态${RES}"
     read -p "按回车返回主菜单..."
@@ -439,13 +425,13 @@ auto_update_alist() {
     local current_version=$(get_current_version)
     if [ "$current_version" = "未安装" ]; then
         echo "Alist 未安装，无法进行自动更新。"
-        return
+        return 1
     fi
     local proxy=$(grep "^AUTO_UPDATE_PROXY=" /etc/environment | cut -d'=' -f2)
     local latest_version=$(get_latest_version "$proxy")
     if [ "$latest_version" = "无法获取最新版本信息" ]; then
         echo "无法获取最新版本信息，自动更新操作取消。"
-        return
+        return 1
     fi
 
     if version_gt "$latest_version" "$current_version"; then
@@ -466,8 +452,7 @@ auto_update_alist() {
             GH_DOWNLOAD_URL="https://github.com/alist-org/alist/releases/latest/download"
         fi
         echo -e "${GREEN_COLOR}下载 Alist ...${RES}"
-        wget "$GH_DOWNLOAD_URL/$ALIST_FILE" -O /tmp/alist.tar.gz
-        if [ $? -ne 0 ]; then
+        if ! download_file "$GH_DOWNLOAD_URL/$ALIST_FILE" "/tmp/alist.tar.gz"; then
             echo -e "${RED_COLOR}下载失败，自动更新终止${RES}"
             echo -e "${GREEN_COLOR}正在恢复之前的版本...${RES}"
             mv /tmp/alist.bak "$ALIST_BINARY"
@@ -505,18 +490,10 @@ auto_update_alist() {
         supervisorctl restart alist
 
         echo -e "${GREEN_COLOR}自动更新完成！${RES}"
+        return 0
     else
         echo "当前已是最新版本，无需更新。"
-    fi
-    # 确保服务正在运行
-    if ! supervisorctl status alist | grep -q "RUNNING"; then
-        echo -e "${YELLOW_COLOR}检测到服务未运行，尝试启动服务...${RES}"
-        supervisorctl start alist
-        sleep 2
-        if ! supervisorctl status alist | grep -q "RUNNING"; then
-            echo -e "${RED_COLOR}服务启动失败，请检查日志${RES}"
-            return 1
-        fi
+        return 0
     fi
 }
 
@@ -697,7 +674,6 @@ restart_service() {
     clear
 }
 
-
 # 检测版本信息
 check_version() {
     local curr=$(get_current_version)
@@ -800,60 +776,64 @@ set_auto_update() {
     clear
 }
 
-# 主菜单
-while true; do
-    echo "Alist 管理工具"
-    echo " 1. 安装Alist"
-    echo " 2. 更新Alist"
-    echo " 3. 卸载Alist"
-    echo " 4. 查看状态"
-    echo " 5. 重置密码"
-    echo " 6. 启动服务"
-    echo " 7. 停止服务"
-    echo " 8. 重启服务"
-    echo " 9. 检测版本信息"
-    echo "10. 设置自动更新"
-    echo " 0. 退出脚本"
-    read -p "请输入你的选择: " choice
+# 主菜单（调整参数检查顺序，先处理 auto-update）
+if [ "$1" = "auto-update" ]; then
+    auto_update_alist
+else
+    while true; do
+        echo "Alist 管理工具"
+        echo " 1. 安装Alist"
+        echo " 2. 更新Alist"
+        echo " 3. 卸载Alist"
+        echo " 4. 查看状态"
+        echo " 5. 重置密码"
+        echo " 6. 启动服务"
+        echo " 7. 停止服务"
+        echo " 8. 重启服务"
+        echo " 9. 检测版本信息"
+        echo "10. 设置自动更新"
+        echo " 0. 退出脚本"
+        read -p "请输入你的选择: " choice
 
-    case "$choice" in
-        1)
-            install_alist
-            ;;
-        2)
-            update_alist
-            ;;
-        3)
-            uninstall_alist
-            ;;
-        4)
-            check_status
-            ;;
-        5)
-            reset_password
-            ;;
-        6)
-            start_service
-            ;;
-        7)
-            stop_service
-            ;;
-        8)
-            restart_service
-            ;;
-        9)
-            check_version
-            ;;
-        10)
-            set_auto_update
-            ;;
-        0)
-            echo "退出脚本"
-            clear  # 清屏
-            break
-            ;;
-        *)
-            echo "无效的选择，请重新输入。"
-            ;;
-    esac
-done
+        case "$choice" in
+            1)
+                install_alist
+                ;;
+            2)
+                update_alist
+                ;;
+            3)
+                uninstall_alist
+                ;;
+            4)
+                check_status
+                ;;
+            5)
+                reset_password
+                ;;
+            6)
+                start_service
+                ;;
+            7)
+                stop_service
+                ;;
+            8)
+                restart_service
+                ;;
+            9)
+                check_version
+                ;;
+            10)
+                set_auto_update
+                ;;
+            0)
+                echo "退出脚本"
+                clear  # 清屏
+                break
+                ;;
+            *)
+                echo "无效的选择，请重新输入。"
+                ;;
+        esac
+    done
+fi
