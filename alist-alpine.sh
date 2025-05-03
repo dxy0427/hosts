@@ -801,65 +801,59 @@ set_auto_update() {
 }
 
 # 主菜单
-if [ "$1" = "auto-update" ]; then
-    # 执行自动更新检查并退出
-    auto_update_alist
-    exit 0
-else
-    while true; do
-        echo "Alist 管理工具"
-        echo " 1. 安装Alist"
-        echo " 2. 更新Alist"
-        echo " 3. 卸载Alist"
-        echo " 4. 查看状态"
-        echo " 5. 重置密码"
-        echo " 6. 启动服务"
-        echo " 7. 停止服务"
-        echo " 8. 重启服务"
-        echo " 9. 检测版本信息"
-        echo "10. 设置自动更新"
-        echo " 0. 退出脚本"
-        read -p "请输入你的选择: " choice
+while true; do
+    echo "Alist 管理工具"
+    echo " 1. 安装Alist"
+    echo " 2. 更新Alist"
+    echo " 3. 卸载Alist"
+    echo " 4. 查看状态"
+    echo " 5. 重置密码"
+    echo " 6. 启动服务"
+    echo " 7. 停止服务"
+    echo " 8. 重启服务"
+    echo " 9. 检测版本信息"
+    echo "10. 设置自动更新"
+    echo " 0. 退出脚本"
+    read -p "请输入你的选择: " choice
 
-        case "$choice" in
-            1)
-                install_alist
-                ;;
-            2)
-                update_alist
-                ;;
-            3)
-                uninstall_alist
-                ;;
-            4)
-                check_status
-                ;;
-            5)
-                reset_password
-                ;;
-            6)
-                start_service
-                ;;
-            7)
-                stop_service
-                ;;
-            8)
-                restart_service
-                ;;
-            9)
-                check_version
-                ;;
-            10)
-                set_auto_update
-                ;;
-            0)
-                echo "退出脚本"
-                clear  # 清屏
-                break
-                ;;
-            *)
-                echo "无效的选择，请重新输入。"
-                ;;
-        esac
-    done
-fi
+    case "$choice" in
+        1)
+            install_alist
+            ;;
+        2)
+            update_alist
+            ;;
+        3)
+            uninstall_alist
+            ;;
+        4)
+            check_status
+            ;;
+        5)
+            reset_password
+            ;;
+        6)
+            start_service
+            ;;
+        7)
+            stop_service
+            ;;
+        8)
+            restart_service
+            ;;
+        9)
+            check_version
+            ;;
+        10)
+            set_auto_update
+            ;;
+        0)
+            echo "退出脚本"
+            clear  # 清屏
+            break
+            ;;
+        *)
+            echo "无效的选择，请重新输入。"
+            ;;
+    esac
+done
