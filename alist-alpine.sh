@@ -534,7 +534,12 @@ uninstall_alist() {
 
     # 停止 Alist 服务
     echo "正在停止 Alist 服务..."
-    supervisorctl stop alist
+    supervisorctl stop alist || true  # 添加 || true 避免因服务不存在而报错
+    # 确保进程已完全终止
+    while pgrep -f "$ALIST_BINARY server" > /dev/null; do
+        pkill -9 -f "$ALIST_BINARY server"
+        sleep 1
+    done
 
     # 删除 Alist 安装目录
     if [ -d "$DOWNLOAD_DIR" ]; then
