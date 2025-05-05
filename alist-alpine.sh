@@ -524,8 +524,9 @@ auto_update_alist() {
 # 卸载 Alist
 uninstall_alist() {
     echo "警告：卸载操作将删除所有与 Alist 相关的数据，包括但不限于配置文件和存储的数据。"
-    read -p "你确定要卸载 Alist 并删除所有数据吗？(y/n): " confirm
-    if [ "$confirm" != "y" ]; then
+    read -p "你确定要卸载 Alist 并删除所有数据吗？(Y/N): " confirm
+    confirm=$(echo "$confirm" | tr [a-z] [A-Z])
+    if [ "$confirm" != "Y" ]; then
         echo "卸载操作已取消。"
         read -p "按回车继续..."
         clear
@@ -541,59 +542,50 @@ uninstall_alist() {
         sleep 1
     done
 
+    # 清理残留的 Supervisor 套接字文件
+    if [ -e "/tmp/supervisor.sock" ]; then
+        rm -f "/tmp/supervisor.sock"
+        echo "已清理残留的 Supervisor 套接字文件"
+    fi
+
+    # 重启 Supervisor 服务（全新启动，避免残留配置）
     echo "正在重启 Supervisor 服务..."
     if pgrep -x "supervisord" > /dev/null; then
-        killall supervisord  # 强制杀死旧进程
+        killall -9 supervisord
         sleep 2
     fi
-    supervisord -c /etc/supervisord.conf
+    echo_supervisord_conf > /etc/supervisord.conf  # 重新生成默认配置
+    supervisord -c /etc/supervisord.conf &> /dev/null
 
-    # 删除 Alist 安装目录
-    if [ -d "$DOWNLOAD_DIR" ]; then
-        echo "正在删除 Alist 安装目录..."
-        rm -rf "$DOWNLOAD_DIR"
+    # 删除 Alist 安装目录（显式指定路径并检查存在性）
+    INSTALL_DIR="/opt/alist"
+    if [ -d "$INSTALL_DIR" ]; then
+        echo "正在删除 Alist 安装目录: $INSTALL_DIR"
+        rm -rf "$INSTALL_DIR"
     else
-        echo "Alist 安装目录不存在，跳过删除操作。"
+        echo "Alist 安装目录 $INSTALL_DIR 不存在，跳过删除操作。"
     fi
 
     # 删除 Alist 进程配置文件
     rm -f "$SUPERVISOR_CONF_FILE"
 
-    # 移除 /etc/supervisord.conf 中的 [include] 部分
-    sed -i '/\[include\]/d' /etc/supervisord.conf
-    sed -i '/files = \/etc\/supervisord_conf\/\*.ini/d' /etc/supervisord.conf
+    # 移除 supervisord.conf 中的 include 配置（一次性删除相关段落）
+    sed -i '/^\[include\]/,/^files = /d' /etc/supervisord.conf
 
-    # 重启 Supervisor 服务以应用配置更改
-    echo "正在重启 Supervisor 服务..."
-    supervisorctl reread
-    supervisorctl update
-
-    # 删除脚本自身
+    # 删除脚本自身和快捷键
     SCRIPT_PATH=$(realpath "$0")
-    if [ -f "$SCRIPT_PATH" ]; then
-        echo "正在删除脚本自身..."
-        rm -f "$SCRIPT_PATH"
-    else
-        echo "脚本文件不存在，跳过删除操作。"
-    fi
-
-    # 删除快捷键
-    if [ -L "$SYMLINK_PATH" ]; then
-        echo "正在删除快捷键..."
-        sudo rm -f "$SYMLINK_PATH"
-    else
-        echo "快捷键不存在，跳过删除操作。"
-    fi
+    [ -f "$SCRIPT_PATH" ] && rm -f "$SCRIPT_PATH"
+    [ -L "$SYMLINK_PATH" ] && sudo rm -f "$SYMLINK_PATH"
 
     # 删除 cron 任务
-    crontab -l | grep -Ev "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update" | crontab -
+    crontab -l | grep -Ev "alist-alpine.sh auto-update" | crontab -
 
     # 清理临时文件
     rm -f /tmp/alist.tar.gz /tmp/alist.bak
 
     echo "Alist 和相关配置已完全卸载。"
-    clear  # 清屏
-    exit 0 # 退出脚本
+    clear
+    exit 0
 }
 
 # 查看状态
