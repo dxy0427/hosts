@@ -51,14 +51,19 @@ check_dependencies() {
 
 # 清理残留进程和配置
 cleanup_residuals() {
-    # 终止残留的 Alist 进程
+    # 终止残留的 Alist 进程（原有代码）
     alist_pids=$(ps -ef | grep "$ALIST_BINARY server" | grep -v grep | awk '{print $2}')
     for pid in $alist_pids; do
-        if [ "$pid" -eq "$pid" ] 2>/dev/null; then
-            kill -9 $pid
-        fi
+        kill -9 "$pid" 2>/dev/null
     done
-    # 清理残留配置文件
+
+    # **新增：终止残留的 supervisord 进程（避免旧配置影响）**
+    supervisord_pid=$(pgrep -x "supervisord")
+    if [ -n "$supervisord_pid" ]; then
+        kill -9 "$supervisord_pid" 2>/dev/null
+    fi
+
+    # 清理残留配置文件（原有代码）
     rm -f "$SUPERVISOR_CONF_FILE"
     rm -rf ~/.alist
 }
@@ -222,17 +227,19 @@ INIT() {
         exit 1
     fi
 
-    # 重新生成 Supervisor 配置文件
+    # **新增：删除旧的 supervisord.conf（避免残留配置）**
+    if [ -f /etc/supervisord.conf ]; then
+        rm -f /etc/supervisord.conf
+    fi
+
+    # 重新生成 Supervisor 基础配置
     echo_supervisord_conf > /etc/supervisord.conf
 
-    # 编辑 Supervisor 配置
-    cat << EOF >> /etc/supervisord.conf
-[include]
-files = /etc/supervisord_conf/*.ini
-EOF
+    # 添加 include 配置（确保只加载新生成的 alist.ini）
+    echo "[include]" >> /etc/supervisord.conf
+    echo "files = /etc/supervisord_conf/*.ini" >> /etc/supervisord.conf
 
-    # 创建并配置 alist 进程
-    echo "正在创建 Alist 进程配置文件..."
+    # 创建并配置 alist 进程（原有代码保留）
     mkdir -p "$SUPERVISOR_CONF_DIR"
     cat << EOF > "$SUPERVISOR_CONF_FILE"
 [program:alist]
@@ -243,16 +250,11 @@ autorestart=true
 environment=CODENATION_ENV=prod
 EOF
 
-    # 启动或重启 Supervisor 服务以应用新配置
-    echo "正在启动 Supervisor 服务..."
+    # 启动 Supervisor 服务（确保以新配置启动）
     if ! supervisord -c /etc/supervisord.conf; then
         echo -e "${RED_COLOR}启动 Supervisord 失败，请检查配置文件！${RES}"
         return 1
     fi
-
-    # 更新 Supervisor 配置
-    supervisorctl reread
-    supervisorctl update
 }
 
 # 安装成功提示
@@ -533,13 +535,18 @@ uninstall_alist() {
     cleanup_residuals
 
     # 停止 Alist 服务
-    echo "正在停止 Alist 服务..."
-    supervisorctl stop alist || true  # 添加 || true 避免因服务不存在而报错
-    # 确保进程已完全终止
+    supervisorctl stop alist || true
     while pgrep -f "$ALIST_BINARY server" > /dev/null; do
         pkill -9 -f "$ALIST_BINARY server"
         sleep 1
     done
+
+    echo "正在重启 Supervisor 服务..."
+    if pgrep -x "supervisord" > /dev/null; then
+        killall supervisord  # 强制杀死旧进程
+        sleep 2
+    fi
+    supervisord -c /etc/supervisord.conf
 
     # 删除 Alist 安装目录
     if [ -d "$DOWNLOAD_DIR" ]; then
