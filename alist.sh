@@ -222,6 +222,11 @@ INIT() {
         exit 1
     fi
 
+    # 确保 supervisor 没有运行
+    echo "停止现有的 supervisord 进程..."
+    pkill supervisord
+    sleep 2
+
     # 重新生成 Supervisor 配置文件
     echo_supervisord_conf > /etc/supervisord.conf
 
@@ -243,16 +248,31 @@ autorestart=true
 environment=CODENATION_ENV=prod
 EOF
 
-    # 启动或重启 Supervisor 服务以应用新配置
+    # 确保 supervisord 完全停止并重新启动
     echo "正在启动 Supervisor 服务..."
-    if ! supervisord -c /etc/supervisord.conf; then
-        echo -e "${RED_COLOR}启动 Supervisord 失败，请检查配置文件！${RES}"
-        return 1
-    fi
+    pkill supervisord
+    sleep 2
+    supervisord -c /etc/supervisord.conf
+    sleep 3  # 等待 supervisord 完全启动
 
     # 更新 Supervisor 配置
+    echo "正在更新 Supervisor 配置..."
     supervisorctl reread
     supervisorctl update
+    supervisorctl start alist
+
+    # 验证 alist 是否正在运行
+    if ! supervisorctl status alist | grep -q "RUNNING"; then
+        echo -e "${YELLOW_COLOR}警告: Alist 可能未正常启动，正在重试...${RES}"
+        supervisorctl restart alist
+        sleep 2
+        if ! supervisorctl status alist | grep -q "RUNNING"; then
+            echo -e "${RED_COLOR}错误: Alist 启动失败，请检查日志！${RES}"
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 # 安装成功提示
