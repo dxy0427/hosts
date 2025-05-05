@@ -66,9 +66,37 @@ cleanup_residuals() {
 # 获取当前版本号
 get_current_version() {
     if [ -f "$ALIST_BINARY" ]; then
-        local version_output="$($ALIST_BINARY version 2>/dev/null)"
-        local version=$(echo "$version_output" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        echo "${version:-未安装}"
+        # 先尝试直接运行获取版本
+        local version_output
+        version_output=$("$ALIST_BINARY" version 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            local version
+            version=$(echo "$version_output" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ -n "$version" ]; then
+                echo "$version"
+                return 0
+            fi
+        fi
+        
+        # 如果直接运行失败，尝试通过 supervisor 获取
+        if supervisorctl status alist | grep -q "RUNNING"; then
+            version_output=$(supervisorctl pid alist | xargs -I {} ps -p {} -o args= | grep "alist" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ -n "$version_output" ]; then
+                echo "$version_output"
+                return 0
+            fi
+        fi
+        
+        # 如果都失败了，尝试从文件属性获取
+        local file_info
+        file_info=$(file "$ALIST_BINARY" 2>/dev/null)
+        version=$(echo "$file_info" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        if [ -n "$version" ]; then
+            echo "$version"
+            return 0
+        fi
+        
+        echo "未安装"
     else
         echo "未安装"
     fi
@@ -541,8 +569,15 @@ auto_update_alist() {
 
 # 卸载 Alist
 uninstall_alist() {
-    echo "警告：卸载操作将删除所有与 Alist 相关的数据，包括但不限于配置文件和存储的数据。"
-    read -p "你确定要卸载 Alist 并删除所有数据吗？(y/n): " confirm
+    echo -e "${RED_COLOR}警告：卸载操作将删除所有与 Alist 相关的数据，包括但不限于：${RES}"
+    echo "1. Alist 程序文件"
+    echo "2. 配置文件和数据目录"
+    echo "3. Supervisor 配置"
+    echo "4. 系统服务和进程"
+    echo "5. 自动更新配置"
+    echo "6. 临时文件和缓存"
+    echo "7. 环境变量设置"
+    read -p "确定要完全卸载 Alist 吗？(y/n): " confirm
     if [ "$confirm" != "y" ]; then
         echo "卸载操作已取消。"
         read -p "按回车继续..."
@@ -550,58 +585,83 @@ uninstall_alist() {
         return
     fi
 
-    cleanup_residuals
+    echo "开始卸载 Alist..."
 
-    # 停止 Alist 服务
-    echo "正在停止 Alist 服务..."
-    supervisorctl stop alist
+    # 1. 停止所有相关服务和进程
+    echo "正在停止服务和进程..."
+    supervisorctl stop alist 2>/dev/null
+    pkill -f "alist"
+    sleep 1  # 等待进程完全停止
 
-    # 删除 Alist 安装目录
-    if [ -d "$DOWNLOAD_DIR" ]; then
-        echo "正在删除 Alist 安装目录..."
-        rm -rf "$DOWNLOAD_DIR"
-    else
-        echo "Alist 安装目录不存在，跳过删除操作。"
+    # 2. 停止和清理 supervisor
+    echo "正在清理 Supervisor..."
+    supervisorctl shutdown 2>/dev/null
+    pkill -f "supervisord"
+    sleep 1  # 等待 supervisor 完全停止
+
+    # 3. 删除 Alist 程序文件和数据
+    echo "正在删除 Alist 文件..."
+    rm -rf "$DOWNLOAD_DIR"
+    rm -rf ~/.alist
+    rm -rf /var/lib/alist
+    rm -rf /var/log/alist
+
+    # 4. 清理 Supervisor 配置
+    echo "正在清理 Supervisor 配置..."
+    rm -f "$SUPERVISOR_CONF_FILE"
+    rm -rf "$SUPERVISOR_CONF_DIR"
+    rm -f /etc/supervisord.conf
+    rm -rf /var/log/supervisor
+    rm -f /var/run/supervisor.sock
+    rm -f /var/run/supervisor.pid
+
+    # 5. 删除系统服务配置
+    echo "正在删除系统服务配置..."
+    rm -f /etc/init.d/alist
+    rm -f /etc/systemd/system/alist.service
+
+    # 6. 清理自动更新相关
+    echo "正在清理自动更新配置..."
+    # 删除 cron 任务
+    crontab -l | grep -v "alist" | crontab -
+    # 清理环境变量设置
+    if [ -f /etc/environment ]; then
+        sed -i '/AUTO_UPDATE_PROXY=/d' /etc/environment
+        sed -i '/ALIST_/d' /etc/environment
     fi
 
-    # 删除 Alist 进程配置文件
-    rm -f "$SUPERVISOR_CONF_FILE"
+    # 7. 清理临时文件
+    echo "正在清理临时文件..."
+    rm -f /tmp/alist*
+    rm -f /tmp/supervisor*
+    rm -rf /tmp/.alist*
 
-    # 移除 /etc/supervisord.conf 中的 [include] 部分
-    sed -i '/\[include\]/d' /etc/supervisord.conf
-    sed -i '/files = \/etc\/supervisord_conf\/\*.ini/d' /etc/supervisord.conf
+    # 8. 删除软链接
+    echo "正在删除软链接..."
+    rm -f "$SYMLINK_PATH"
+    rm -f /usr/local/bin/alist*
+    rm -f /usr/bin/alist*
 
-    # 重启 Supervisor 服务以应用配置更改
-    echo "正在重启 Supervisor 服务..."
-    supervisorctl reread
-    supervisorctl update
+    # 9. 删除日志文件
+    echo "正在删除日志文件..."
+    rm -rf /var/log/alist*
+    rm -f /var/log/supervisor/alist*
 
-    # 删除脚本自身
+    # 10. 清理系统缓存
+    echo "正在清理系统缓存..."
+    sync
+
+    # 11. 删除脚本自身
     SCRIPT_PATH=$(realpath "$0")
     if [ -f "$SCRIPT_PATH" ]; then
-        echo "正在删除脚本自身..."
+        echo "正在删除安装脚本..."
         rm -f "$SCRIPT_PATH"
-    else
-        echo "脚本文件不存在，跳过删除操作。"
     fi
 
-    # 删除快捷键
-    if [ -L "$SYMLINK_PATH" ]; then
-        echo "正在删除快捷键..."
-        sudo rm -f "$SYMLINK_PATH"
-    else
-        echo "快捷键不存在，跳过删除操作。"
-    fi
-
-    # 删除 cron 任务
-    crontab -l | grep -Ev "^[[:space:]]*0[[:space:]]+4[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+.*/alist-alpine.sh auto-update" | crontab -
-
-    # 清理临时文件
-    rm -f /tmp/alist.tar.gz /tmp/alist.bak
-
-    echo "Alist 和相关配置已完全卸载。"
-    clear  # 清屏
-    exit 0 # 退出脚本
+    echo -e "${GREEN_COLOR}Alist 已完全卸载！${RES}"
+    echo -e "${GREEN_COLOR}所有相关文件和配置已清理完毕。${RES}"
+    clear
+    exit 0
 }
 
 # 查看状态
