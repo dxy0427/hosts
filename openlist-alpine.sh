@@ -60,11 +60,6 @@ RED_COLOR="\033[31m"
 RES="\033[0m"
 
 CRON_JOB_COMMAND="$SCRIPT_DIR/$SCRIPT_NAME auto-update"
-CRON_JOB_SCHEDULE="0 4 * * *" # 每天凌晨4点
-CRON_JOB="$CRON_JOB_SCHEDULE $CRON_JOB_COMMAND"
-
-ADMIN_USER=""
-ADMIN_PASS=""
 
 # --- Helper Functions ---
 
@@ -127,43 +122,60 @@ version_gt() {
 }
 
 download_with_retry() {
-    # implementation kept from previous version
     local url="$1"
     local output_path="$2"
-    local max_retries=3
-    local attempt=0
-    local wait_time=5
-
-    echo -e "${GREEN_COLOR}正在下载: $url 到 $output_path ${RES}"
-    while [ $attempt -lt $max_retries ]; do
-        attempt=$((attempt + 1))
-        if curl -L --connect-timeout 15 --retry 3 --retry-delay 5 "$url" -o "$output_path"; then
-            if [ -s "$output_path" ]; then
-                if ! file "$output_path" | grep -q "gzip compressed data"; then
-                     echo -e "${YELLOW_COLOR}下载的文件不是有效的 gzip 压缩包 (尝试 $attempt/$max_retries)。${RES}"
-                     _sudo rm -f "$output_path"
-                else
-                    echo -e "${GREEN_COLOR}下载成功。${RES}"
-                    return 0
-                fi
-            else
-                echo -e "${YELLOW_COLOR}下载成功但文件为空。 (尝试 $attempt/$max_retries)${RES}"
-                _sudo rm -f "$output_path"
-            fi
-        else
-            echo -e "${YELLOW_COLOR}下载失败 (尝试 $attempt/$max_retries)。${RES}"
-        fi
-        if [ $attempt -lt $max_retries ]; then
-            echo -e "${YELLOW_COLOR}${wait_time} 秒后重试...${RES}"
-            sleep $wait_time
-        fi
-    done
-    echo -e "${RED_COLOR}下载失败 $max_retries 次尝试后。${RES}"
-    _sudo rm -f "$output_path"
-    return 1
+    echo -e "${GREEN_COLOR}正在下载: $url ${RES}"
+    if ! curl -L --connect-timeout 15 --retry 3 --retry-delay 5 "$url" -o "$output_path" || [ ! -s "$output_path" ]; then
+        echo -e "${RED_COLOR}下载失败。${RES}"; return 1
+    fi
+    if ! file "$output_path" | grep -q "gzip compressed data"; then
+        echo -e "${RED_COLOR}下载的文件不是有效的压缩包。${RES}"; return 1
+    fi
+    echo -e "${GREEN_COLOR}下载成功。${RES}"
+    return 0
 }
 
 # --- Main Operations ---
+
+setup_supervisor() {
+    echo "正在配置 Supervisor..."
+    # Ensure supervisor is installed
+    if ! command -v supervisord >/dev/null 2>&1; then
+        echo "正在安装 Supervisor..."
+        _sudo apk add --no-cache supervisor
+    fi
+    
+    # Create config file
+    _sudo sh -c "cat > '$OPENLIST_SUPERVISOR_CONF_FILE'" << EOF
+[program:openlist]
+directory=$DOWNLOAD_DIR
+command=$OPENLIST_BINARY server --data $DATA_DIR
+autostart=true
+autorestart=true
+startsecs=5
+stopsignal=QUIT
+stdout_logfile=/var/log/openlist_stdout.log
+stderr_logfile=/var/log/openlist_stderr.log
+environment=GIN_MODE=release
+EOF
+
+    # Force kill any running supervisor and restart with new config
+    _sudo pkill supervisord
+    sleep 1
+    _sudo supervisord -c /etc/supervisord.conf
+    sleep 1
+    
+    _sudo supervisorctl reread
+    _sudo supervisorctl update
+    _sudo supervisorctl start openlist
+
+    sleep 2
+    if ! _sudo supervisorctl status openlist | grep -q "RUNNING"; then
+        echo -e "${RED_COLOR}OpenList 服务启动失败，请检查日志。${RES}"
+        return 1
+    fi
+    return 0
+}
 
 do_install_openlist() {
     if [ "$(get_current_version)" != "未安装" ]; then
@@ -188,46 +200,18 @@ do_install_openlist() {
     _sudo rm -f "$temp_path"
     _sudo chmod +x "$OPENLIST_BINARY"
     
-    # Setup Supervisor
-    echo "正在配置 Supervisor..."
-    _sudo sh -c "cat > '$OPENLIST_SUPERVISOR_CONF_FILE'" << EOF
-[program:openlist]
-directory=$DOWNLOAD_DIR
-command=$OPENLIST_BINARY server --data $DATA_DIR
-autostart=true
-autorestart=true
-startsecs=5
-stopsignal=QUIT
-stdout_logfile=/var/log/openlist_stdout.log
-stderr_logfile=/var/log/openlist_stderr.log
-environment=GIN_MODE=release
-EOF
-    _sudo supervisorctl reread && _sudo supervisorctl update && _sudo supervisorctl start openlist
-    
-    sleep 2
-    if ! _sudo supervisorctl status openlist | grep -q "RUNNING"; then
-        echo -e "${RED_COLOR}OpenList 服务启动失败，请检查日志。${RES}"
-    else
-        echo -e "${GREEN_COLOR}OpenList 安装并启动成功!${RES}"
-        installation_summary
-    fi
+    setup_supervisor
 }
 
 do_update_openlist() {
     local current_version=$(get_current_version)
-    if [ "$current_version" = "未安装" ]; then
-        echo -e "${RED_COLOR}OpenList 未安装，无法更新。${RES}"; return
-    fi
+    if [ "$current_version" = "未安装" ]; then echo -e "${RED_COLOR}OpenList 未安装，无法更新。${RES}"; return; fi
     
     local latest_version=$(get_latest_version)
-    if [ "$latest_version" = "无法获取" ]; then
-        echo -e "${RED_COLOR}无法获取最新版本信息。${RES}"; return
-    fi
+    if [ "$latest_version" = "无法获取" ]; then echo -e "${RED_COLOR}无法获取最新版本信息。${RES}"; return; fi
     
     echo "当前版本: $current_version, 最新版本: $latest_version"
-    if ! version_gt "$latest_version" "$current_version"; then
-        echo -e "${GREEN_COLOR}当前已是最新版本，无需更新。${RES}"; return
-    fi
+    if ! version_gt "$latest_version" "$current_version"; then echo -e "${GREEN_COLOR}当前已是最新版本。${RES}"; return; fi
 
     read -p "检测到新版本 ${latest_version}，是否更新? (y/n): " confirm
     [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "更新已取消。"; return; }
@@ -248,8 +232,7 @@ do_update_openlist() {
     echo "正在重启 OpenList 服务..."
     _sudo supervisorctl start openlist
     
-    sleep 2
-    local new_version=$(get_current_version)
+    sleep 2; local new_version=$(get_current_version)
     echo -e "${GREEN_COLOR}OpenList 更新成功！当前版本: $new_version${RES}"
 }
 
@@ -269,10 +252,8 @@ do_uninstall_openlist() {
 }
 
 do_check_status() {
-    echo "--- OpenList 服务状态 (Supervisor) ---"
-    if ! command -v supervisorctl >/dev/null 2>&1; then
-        echo -e "${RED_COLOR}错误: supervisorctl 命令未找到。${RES}"; return
-    fi
+    echo "--- OpenList 服务状态 ---"
+    if ! command -v supervisorctl >/dev/null 2>&1; then echo -e "${RED_COLOR}错误: supervisorctl 命令未找到。${RES}"; return; fi
     
     local status_output=$(_sudo supervisorctl status openlist 2>&1)
     if echo "$status_output" | grep -q "RUNNING"; then
@@ -285,7 +266,8 @@ do_check_status() {
 
     echo "--- 自动更新任务 ---"
     if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
-        echo -e "状态: ${GREEN_COLOR}已开启${RES}"
+        local job_line=$(crontab -l | grep "$CRON_JOB_COMMAND")
+        echo -e "状态: ${GREEN_COLOR}已开启${RES} (执行时间: ${job_line%%$CRON_JOB_COMMAND*})"
     else
         echo -e "状态: ${RED_COLOR}未开启${RES}"
     fi
@@ -356,35 +338,37 @@ do_check_version_info() {
 }
 
 do_set_auto_update() {
-    echo "--- 设置自动更新 (每日凌晨4点) ---"
+    echo "--- 设置自动更新 ---"
     if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
         read -p "自动更新已开启，是否要关闭? (y/n): " confirm_disable
-        if [ "$confirm_disable" = "y" ] || [ "$confirm_disable" = "Y" ]; then
-            (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
+        if [ "$confirm_disable" = "y" ]; then
+            (crontab -l | grep -vF "$CRON_JOB_COMMAND") | crontab -
             echo -e "${GREEN_COLOR}自动更新已关闭。${RES}"
-        else
-            echo "操作已取消。"
         fi
     else
         read -p "是否要开启自动更新? (y/n): " confirm_enable
-        if [ "$confirm_enable" = "y" ] || [ "$confirm_enable" = "Y" ]; then
-            (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
-            echo -e "${GREEN_COLOR}自动更新已开启。${RES}"
+        if [ "$confirm_enable" = "y" ]; then
+            echo "请输入每日自动检查更新的时间 (24小时制)。"
+            read -p "小时 (0-23，默认 4): " hour
+            read -p "分钟 (0-59，默认 0): " min
+            hour=${hour:-4}
+            min=${min:-0}
             
-            # Timezone setting
+            local cron_schedule="$min $hour * * *"
+            local new_cron_job="$cron_schedule $CRON_JOB_COMMAND"
+            (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND"; echo "$new_cron_job") | crontab -
+            echo -e "${GREEN_COLOR}自动更新已开启，每日将在 ${hour}:${min} 执行。${RES}"
+            
             if [ "$(cat /etc/timezone 2>/dev/null)" != "Asia/Shanghai" ]; then
                 read -p "检测到系统时区不是上海时间，是否设置为上海时间? (y/n): " confirm_tz
-                if [ "$confirm_tz" = "y" ] || [ "$confirm_tz" = "Y" ]; then
+                if [ "$confirm_tz" = "y" ]; then
                     if ! command -v setup-timezone >/dev/null 2>&1; then
-                        echo "正在安装时区工具 tzdata..."
                         _sudo apk add --no-cache tzdata
                     fi
                     _sudo setup-timezone -z Asia/Shanghai
                     echo "时区已设置为 Asia/Shanghai。"
                 fi
             fi
-        else
-            echo "操作已取消。"
         fi
     fi
 }
@@ -393,7 +377,7 @@ do_set_auto_update() {
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v5.0 - Alpine)${RES}"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v6.0 - Alpine)${RES}"
         echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
@@ -418,7 +402,7 @@ main_menu() {
             9) do_check_version_info ;;
             10) do_set_auto_update ;;
             0) echo "退出脚本。"; exit 0 ;;
-            *) echo -e "${RED_COLOR}无效的选择，请重新输入。${RES}" ;;
+            *) echo -e "${RED_COLOR}无效的选择。${RES}" ;;
         esac
         read -p $'\n按回车键返回主菜单...' _unused_input
     done
@@ -426,9 +410,9 @@ main_menu() {
 
 # --- Script Entry Point ---
 if [ "$1" = "auto-update" ]; then
-    # This is for the cron job, it runs non-interactively
     LOG_FILE="/var/log/openlist_autoupdate.log"
     echo "--- Auto-Update Starting: $(date) ---" >> "$LOG_FILE"
+    # This calls the full update function
     do_update_openlist >> "$LOG_FILE" 2>&1
     exit 0
 fi
