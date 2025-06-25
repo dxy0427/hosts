@@ -100,26 +100,20 @@ version_gt() {
 
 # --- Main Operations ---
 force_cleanup() {
-    echo "正在执行强制清理..."
-    # Kill any process related to openlist, supervised or not
     _sudo pkill -f "$OPENLIST_BINARY server" 2>/dev/null
-    # Stop and remove from supervisor if exists
     if _sudo supervisorctl status openlist >/dev/null 2>&1; then
         _sudo supervisorctl stop openlist >/dev/null 2>&1
         _sudo supervisorctl remove openlist >/dev/null 2>&1
     fi
-    # Remove config file
     _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
-    # Update supervisor
     if command -v supervisorctl >/dev/null 2>&1; then
         _sudo supervisorctl reread >/dev/null 2>&1
         _sudo supervisorctl update >/dev/null 2>&1
     fi
-    echo "强制清理完成。"
 }
 
 setup_supervisor() {
-    echo "正在配置 Supervisor..."
+    echo "正在配置 Supervisor 并启动服务..."
     _sudo mkdir -p "$SUPERVISOR_CONF_DIR"
     _sudo sh -c "cat > '$OPENLIST_SUPERVISOR_CONF_FILE'" << EOF
 [program:openlist]
@@ -133,17 +127,11 @@ stdout_logfile=/var/log/openlist_stdout.log
 stderr_logfile=/var/log/openlist_stderr.log
 environment=GIN_MODE=release
 EOF
-    echo "强制重启 Supervisor 服务以应用新配置..."
-    _sudo pkill supervisord >/dev/null 2>&1
-    sleep 1
-    _sudo supervisord -c /etc/supervisord.conf
-    sleep 2
+    _sudo pkill supervisord >/dev/null 2>&1; sleep 1
+    _sudo supervisord -c /etc/supervisord.conf; sleep 2
     
     if ! _sudo supervisorctl status openlist | grep -q "RUNNING"; then
-        echo -e "${RED_COLOR}OpenList 服务启动失败，以下是相关日志：${RES}"
-        echo -e "\n${YELLOW_COLOR}--- Supervisor 状态 ---${RES}"; _sudo supervisorctl status openlist
-        echo -e "\n${YELLOW_COLOR}--- OpenList 标准输出日志 (stdout.log) ---${RES}"; _sudo tail -n 20 /var/log/openlist_stdout.log
-        echo -e "\n${YELLOW_COLOR}--- OpenList 错误日志 (stderr.log) ---${RES}"; _sudo tail -n 20 /var/log/openlist_stderr.log
+        echo -e "${RED_COLOR}OpenList 服务启动失败，请检查日志。${RES}"
         return 1
     fi
     return 0
@@ -154,29 +142,43 @@ do_install_openlist() {
         echo -e "${YELLOW_COLOR}OpenList 已安装，如需重装请先卸载。${RES}"; return
     fi
     
-    # Run cleanup first to ensure a clean slate
+    echo "步骤 1: 强制清理旧环境..."
     force_cleanup
+    echo "步骤 2: 检查并安装依赖..."
     check_dependencies || return 1
     
     local latest_version=$(get_latest_version)
     if [ "$latest_version" = "无法获取" ]; then echo -e "${RED_COLOR}无法获取最新版本，安装中止。${RES}"; return 1; fi
     
+    echo "步骤 3: 下载并解压 OpenList..."
     _sudo mkdir -p "$DOWNLOAD_DIR" "$DATA_DIR"
-    
     local download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
     local temp_path="/tmp/$OPENLIST_FILE"
     echo -e "${GREEN_COLOR}正在下载: $download_url ${RES}"
     if ! curl -L --fail -o "$temp_path" "$download_url"; then echo -e "${RED_COLOR}下载失败。${RES}"; return 1; fi
-    
-    echo "正在解压..."
     _sudo tar zxf "$temp_path" -C "$DOWNLOAD_DIR/" || { echo -e "${RED_COLOR}解压失败!${RES}"; _sudo rm -f "$temp_path"; return 1; }
-    _sudo rm -f "$temp_path"
-    _sudo chmod +x "$OPENLIST_BINARY"
+    _sudo rm -f "$temp_path"; _sudo chmod +x "$OPENLIST_BINARY"
+
+    echo "步骤 4: 执行首次运行以初始化配置..."
+    local init_output
+    init_output=$(_sudo "$OPENLIST_BINARY" server --data "$DATA_DIR" 2>&1)
+    local initial_password=$(echo "$init_output" | grep "initial password is:" | awk '{print $NF}')
     
+    echo "步骤 5: 配置 Supervisor 并启动服务..."
     if ! setup_supervisor; then
         return 1
     fi
-    echo -e "${GREEN_COLOR}OpenList 安装并启动成功!${RES}"
+    
+    echo -e "\n${GREEN_COLOR}=========================================="
+    echo -e "      OpenList 安装并启动成功! 🎉"
+    echo -e "==========================================${RES}"
+    if [ -n "$initial_password" ]; then
+        echo -e "${YELLOW_COLOR}重要: 初始管理员凭据:${RES}"
+        echo -e "  用户名: ${GREEN_COLOR}admin${RES}"
+        echo -e "  密  码: ${GREEN_COLOR}${initial_password}${RES}"
+    else
+        echo -e "${YELLOW_COLOR}未能自动获取初始密码，请使用重置密码功能。${RES}"
+    fi
 }
 
 do_update_openlist() {
@@ -327,7 +329,7 @@ do_set_auto_update() {
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v10.0 - Alpine)${RES}"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v11.0 - Alpine)${RES}"
         echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
