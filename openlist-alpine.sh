@@ -67,7 +67,7 @@ _sudo() {
 
 check_dependencies() {
     local missing_deps=""
-    local dependencies="wget tar curl supervisor file"
+    local dependencies="wget tar curl supervisor file psmisc" # psmisc provides pkill
     for dep in $dependencies; do
         if ! command -v "$dep" >/dev/null 2>&1; then
             missing_deps="$missing_deps $dep"
@@ -99,6 +99,25 @@ version_gt() {
 }
 
 # --- Main Operations ---
+force_cleanup() {
+    echo "正在执行强制清理..."
+    # Kill any process related to openlist, supervised or not
+    _sudo pkill -f "$OPENLIST_BINARY server" 2>/dev/null
+    # Stop and remove from supervisor if exists
+    if _sudo supervisorctl status openlist >/dev/null 2>&1; then
+        _sudo supervisorctl stop openlist >/dev/null 2>&1
+        _sudo supervisorctl remove openlist >/dev/null 2>&1
+    fi
+    # Remove config file
+    _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
+    # Update supervisor
+    if command -v supervisorctl >/dev/null 2>&1; then
+        _sudo supervisorctl reread >/dev/null 2>&1
+        _sudo supervisorctl update >/dev/null 2>&1
+    fi
+    echo "强制清理完成。"
+}
+
 setup_supervisor() {
     echo "正在配置 Supervisor..."
     _sudo mkdir -p "$SUPERVISOR_CONF_DIR"
@@ -121,8 +140,10 @@ EOF
     sleep 2
     
     if ! _sudo supervisorctl status openlist | grep -q "RUNNING"; then
-        echo -e "${RED_COLOR}OpenList 服务启动失败，请检查日志。${RES}"
-        _sudo supervisorctl status openlist
+        echo -e "${RED_COLOR}OpenList 服务启动失败，以下是相关日志：${RES}"
+        echo -e "\n${YELLOW_COLOR}--- Supervisor 状态 ---${RES}"; _sudo supervisorctl status openlist
+        echo -e "\n${YELLOW_COLOR}--- OpenList 标准输出日志 (stdout.log) ---${RES}"; _sudo tail -n 20 /var/log/openlist_stdout.log
+        echo -e "\n${YELLOW_COLOR}--- OpenList 错误日志 (stderr.log) ---${RES}"; _sudo tail -n 20 /var/log/openlist_stderr.log
         return 1
     fi
     return 0
@@ -132,6 +153,9 @@ do_install_openlist() {
     if [ "$(get_current_version)" != "未安装" ]; then
         echo -e "${YELLOW_COLOR}OpenList 已安装，如需重装请先卸载。${RES}"; return
     fi
+    
+    # Run cleanup first to ensure a clean slate
+    force_cleanup
     check_dependencies || return 1
     
     local latest_version=$(get_latest_version)
@@ -164,7 +188,7 @@ do_update_openlist() {
     echo "当前版本: $current_version, 最新版本: $latest_version"
     if ! version_gt "$latest_version" "$current_version"; then echo -e "${GREEN_COLOR}当前已是最新版本。${RES}"; return; fi
 
-    echo -e "${YELLOW_COLOR}检测到新版本 ${latest_version}，是否更新? (y/n):${RES}"
+    echo -e "${YELLOW_COLOR}检测到新版本 ${latest_version}，是否更新?${RES}"
     read -p "请输入 'y' 确认: " confirm
     [ "$confirm" != "y" ] && { echo "更新已取消。"; return; }
 
@@ -188,21 +212,16 @@ do_uninstall_openlist() {
     read -p "请输入 'y' 确认: " confirm
     [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "卸载已取消。"; return; }
     
-    echo "1. 正在停止 OpenList 服务..."
-    _sudo supervisorctl stop openlist >/dev/null 2>&1
-    echo "2. 正在从 Supervisor 中移除..."
-    _sudo supervisorctl remove openlist >/dev/null 2>&1
-    echo "3. 正在删除 Supervisor 配置文件..."
-    _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
-    _sudo supervisorctl update >/dev/null 2>&1
-    echo "4. 正在删除程序文件和数据目录..."
+    echo "1. 正在强制停止所有 OpenList 进程..."
+    force_cleanup
+    echo "2. 正在删除程序文件和数据目录..."
     _sudo rm -rf "$DOWNLOAD_DIR"
-    echo "5. 正在移除自动更新任务..."
+    echo "3. 正在移除自动更新任务..."
     (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
-    echo "6. 正在清理日志文件..."
+    echo "4. 正在清理日志文件..."
     _sudo rm -f /var/log/openlist_*.log
-    [ -L "$SYMLINK_PATH" ] && _sudo rm -f "$SYMLINK_PATH"
-    echo -e "${GREEN_COLOR}OpenList 卸载完成。${RES}"
+    [ -L "$SYMLINK_PATH" ] && { echo "5. 正在删除符号链接..."; _sudo rm -f "$SYMLINK_PATH"; }
+    echo -e "\n${GREEN_COLOR}OpenList 卸载完成。${RES}"
 }
 
 do_check_status() {
@@ -308,7 +327,7 @@ do_set_auto_update() {
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v8.0 - Alpine)${RES}"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v10.0 - Alpine)${RES}"
         echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
