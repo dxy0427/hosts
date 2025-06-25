@@ -518,9 +518,67 @@ do_install_openlist() {
 }
 
 do_update_openlist() {
-    # This function is defined but its implementation is simplified for brevity in this example.
-    # A full implementation would be similar to the do_install_openlist function.
-    echo "更新功能待实现。"
+    local current_version
+    current_version=$(get_current_version)
+    if [ "$current_version" = "未安装" ] || [ "$current_version" = "未安装或无法获取" ]; then
+        echo "OpenList 未安装，无法进行更新。请先安装。"
+        return
+    fi
+
+    echo -e "${GREEN_COLOR}正在检查最新版本...${RES}"
+    local latest_version
+    latest_version=$(get_latest_version "")
+
+    if echo "$latest_version" | grep -q "无法获取"; then
+        echo -e "${RED_COLOR}无法获取最新版本信息。更新操作取消。${RES}"
+        return
+    fi
+
+    echo "当前版本: $current_version, 最新版本: $latest_version"
+    if ! version_gt "$latest_version" "$current_version"; then
+        echo -e "${GREEN_COLOR}当前已是最新版本 ($current_version)，无需更新。${RES}"
+        return
+    fi
+
+    read -p "${YELLOW_COLOR}检测到新版本 $latest_version。是否进行更新？(y/n): ${RES}" confirm_update
+    if [ "$confirm_update" != "y" ] && [ "$confirm_update" != "Y" ]; then
+        echo "更新操作已取消。"
+        return
+    fi
+
+    echo -e "${GREEN_COLOR}开始更新 OpenList 至版本 $latest_version ...${RES}"
+    _sudo supervisorctl stop openlist
+    
+    local backup_path="/tmp/openlist_backup_$(date +%s)"
+    echo "备份当前 OpenList 二进制文件到 $backup_path..."
+    if [ -f "$OPENLIST_BINARY" ]; then
+        _sudo cp "$OPENLIST_BINARY" "$backup_path"
+    fi
+    
+    # Update download logic
+    local temp_download_path="/tmp/$OPENLIST_FILE"
+    local gh_download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
+    if ! download_with_retry "$gh_download_url" "$temp_download_path"; then
+        echo -e "${RED_COLOR}下载新版本失败。${RES}"
+        _sudo supervisorctl start openlist
+        return 1
+    fi
+    
+    _sudo rm -f "$OPENLIST_BINARY"
+    if ! _sudo tar zxf "$temp_download_path" -C "$DOWNLOAD_DIR/"; then
+        echo -e "${RED_COLOR}解压新版本失败。${RES}"
+        if [ -f "$backup_path" ]; then _sudo cp "$backup_path" "$OPENLIST_BINARY"; fi
+        _sudo supervisorctl start openlist
+        return 1
+    fi
+    _sudo rm -f "$temp_download_path"
+    _sudo chmod +x "$OPENLIST_BINARY"
+    if [ -f "$backup_path" ]; then _sudo rm -f "$backup_path"; fi
+    
+    _sudo supervisorctl restart openlist
+    
+    local new_current_version=$(get_current_version)
+    echo -e "${GREEN_COLOR}OpenList 更新成功！当前版本: $new_current_version${RES}"
 }
 
 do_uninstall_openlist() {
@@ -537,33 +595,103 @@ do_uninstall_openlist() {
     _sudo supervisorctl reread
     _sudo supervisorctl update
     _sudo rm -rf "$DOWNLOAD_DIR"
-
     (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
-    if [ -f "/etc/environment" ] && grep -q "^OPENLIST_AUTO_UPDATE_PROXY=" /etc/environment; then
+    if [ -f "/etc/environment" ]; then
         _sudo sed -i '/^OPENLIST_AUTO_UPDATE_PROXY=/d' /etc/environment
     fi
     _sudo rm -f /var/log/openlist_*.log
-    _sudo rm -f "$SYMLINK_PATH"
+    if [ -L "$SYMLINK_PATH" ]; then _sudo rm -f "$SYMLINK_PATH"; fi
     echo -e "${GREEN_COLOR}OpenList 卸载完成。${RES}"
 }
 
 do_check_status() {
     echo "--- OpenList 服务状态 (Supervisor) ---"
-    if command -v supervisorctl >/dev/null 2>&1; then
-        _sudo supervisorctl status openlist
-    else
+    if ! command -v supervisorctl >/dev/null 2>&1; then
         echo "supervisorctl 命令未找到。"
+        return
     fi
+    
+    local status_output
+    status_output=$(_sudo supervisorctl status openlist 2>&1)
+    
+    if echo "$status_output" | grep -q "RUNNING"; then
+        echo -e "${GREEN_COLOR}状态: 运行中${RES}"
+    elif echo "$status_output" | grep -q "STOPPED" || echo "$status_output" | grep -q "EXITED"; then
+        echo -e "${RED_COLOR}状态: 已停止${RES}"
+    elif echo "$status_output" | grep -q "STARTING"; then
+        echo -e "${YELLOW_COLOR}状态: 启动中${RES}"
+    elif echo "$status_output" | grep -q "FATAL"; then
+        echo -e "${RED_COLOR}状态: 启动失败 (FATAL)${RES}"
+    else
+        echo "状态: 未知 (可能是未安装)"
+    fi
+    echo "Supervisor 原始输出: $status_output"
 }
 
 do_reset_password() {
-    echo "重置密码功能待实现。"
+    if [ ! -f "$OPENLIST_BINARY" ]; then
+        echo -e "${RED_COLOR}错误：OpenList 未安装。${RES}"
+        return 1
+    fi
+
+    echo -e "\n请选择密码重置方式:"
+    echo "  1. 生成随机密码"
+    echo "  2. 设置新密码"
+    read -p "请输入选项 [1-2]: " choice
+
+    case "$choice" in
+        1)
+            echo "正在生成随机密码..."
+            _sudo "$OPENLIST_BINARY" admin random --data "$DATA_DIR"
+            ;;
+        2)
+            read -sp "请输入新密码: " new_pass
+            echo
+            if [ -z "$new_pass" ]; then
+                echo -e "${RED_COLOR}密码不能为空。${RES}"
+                return
+            fi
+            echo "正在为 'admin' 用户设置新密码..."
+            _sudo "$OPENLIST_BINARY" admin set "$new_pass" --data "$DATA_DIR"
+            echo -e "${GREEN_COLOR}密码设置成功。${RES}"
+            ;;
+        *)
+            echo -e "${RED_COLOR}无效的选项。${RES}"
+            ;;
+    esac
 }
 
 control_service() {
     local action="$1"
+    local action_cn
+    case "$action" in
+        start) action_cn="启动" ;;
+        stop) action_cn="停止" ;;
+        restart) action_cn="重启" ;;
+    esac
+
+    echo "正在尝试 ${action_cn} OpenList 服务..."
     if ! command -v supervisorctl >/dev/null 2>&1; then echo "supervisorctl 命令未找到。"; return 1; fi
-    _sudo supervisorctl "${action}" openlist
+    
+    local output
+    output=$(_sudo supervisorctl "${action}" openlist 2>&1)
+
+    if echo "$output" | grep -q "ERROR (already started)"; then
+        echo -e "${YELLOW_COLOR}操作提示: 服务已在运行，无需重复启动。${RES}"
+    elif echo "$output" | grep -q "ERROR (not running)"; then
+        echo -e "${YELLOW_COLOR}操作提示: 服务未在运行。${RES}"
+        # If restarting a non-running service, it will start it
+        if [ "$action" = "restart" ] && echo "$output" | grep -q "started"; then
+            echo -e "${GREEN_COLOR}操作成功: 服务已启动。${RES}"
+        fi
+    elif echo "$output" | grep -q "started"; then
+        echo -e "${GREEN_COLOR}操作成功: 服务已${action_cn}。${RES}"
+    elif echo "$output" | grep -q "stopped"; then
+        echo -e "${GREEN_COLOR}操作成功: 服务已停止。${RES}"
+    else
+        echo -e "${RED_COLOR}操作失败或状态未知。${RES}"
+        echo "原始输出: $output"
+    fi
 }
 
 do_start_service() { control_service "start"; }
@@ -574,27 +702,43 @@ do_check_version_info() {
     local current_version_info
     current_version_info=$(get_current_version)
     echo -e "${GREEN_COLOR}当前安装版本: ${current_version_info}${RES}"
+    echo -e "${YELLOW_COLOR}正在检查最新版本...${RES}"
+    local latest_version_info
+    latest_version_info=$(get_latest_version)
+    echo -e "最新可用版本: ${latest_version_info:-获取失败}${RES}"
 }
 
 do_set_auto_update() {
-    echo "设置自动更新功能待实现。"
+    echo "--- 设置 OpenList 自动更新 ---"
+    read -p "是否开启每日自动更新？(y/n): " confirm
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND"; echo "$CRON_JOB") | crontab -
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN_COLOR}已开启每日凌晨 4 点自动更新。${RES}"
+        else
+            echo -e "${RED_COLOR}设置 cron 任务失败。${RES}"
+        fi
+    else
+        (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
+        echo "已关闭自动更新。"
+    fi
 }
 
 # --- Main Menu & Script Execution ---
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v3.0 - Alpine)${RES}"
-        echo "------------------------------------------"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v4.0 - Alpine)${RES}"
+        echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
         echo " 5. 重置密码                6. 启动服务"
         echo " 7. 停止服务                8. 重启服务"
-        echo " 9. 版本信息               10. 自动更新设置"
+        echo " 9. 版本信息               10. 设置自动更新"
         echo " 0. 退出脚本"
-        echo "------------------------------------------"
+        echo "=========================================="
         current_version_display=$(get_current_version)
-        echo "当前版本: $current_version_display | 系统架构: $ARCH"
+        echo "当前版本: ${current_version_display} | 系统架构: ${ARCH}"
         read -p "请输入你的选择 [0-10]: " choice_menu
 
         case "$choice_menu" in
