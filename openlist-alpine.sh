@@ -74,8 +74,8 @@ check_dependencies() {
         fi
     done
     if [ -n "$missing_deps" ]; then
-        echo -e "${YELLOW_COLOR}缺少依赖:$missing_deps，正在尝试安装...${RES}"
-        if ! _sudo apk add --no-cache$missing_deps; then
+        echo -e "${YELLOW_COLOR}缺少依赖:$(echo "$missing_deps" | sed 's/^ //')，正在尝试安装...${RES}"
+        if ! _sudo apk add --no-cache $(echo "$missing_deps"); then
             echo -e "${RED_COLOR}依赖安装失败，请手动安装。${RES}"; return 1
         fi
     fi
@@ -114,7 +114,7 @@ stdout_logfile=/var/log/openlist_stdout.log
 stderr_logfile=/var/log/openlist_stderr.log
 environment=GIN_MODE=release
 EOF
-    # Force kill any running supervisor and restart with new config
+    echo "强制重启 Supervisor 服务以应用新配置..."
     _sudo pkill supervisord >/dev/null 2>&1
     sleep 1
     _sudo supervisord -c /etc/supervisord.conf
@@ -149,7 +149,10 @@ do_install_openlist() {
     _sudo rm -f "$temp_path"
     _sudo chmod +x "$OPENLIST_BINARY"
     
-    setup_supervisor
+    if ! setup_supervisor; then
+        return 1
+    fi
+    echo -e "${GREEN_COLOR}OpenList 安装并启动成功!${RES}"
 }
 
 do_update_openlist() {
@@ -161,8 +164,9 @@ do_update_openlist() {
     echo "当前版本: $current_version, 最新版本: $latest_version"
     if ! version_gt "$latest_version" "$current_version"; then echo -e "${GREEN_COLOR}当前已是最新版本。${RES}"; return; fi
 
-    read -p "检测到新版本 ${latest_version}，是否更新? (y/n): " confirm
-    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "更新已取消。"; return; }
+    echo -e "${YELLOW_COLOR}检测到新版本 ${latest_version}，是否更新? (y/n):${RES}"
+    read -p "请输入 'y' 确认: " confirm
+    [ "$confirm" != "y" ] && { echo "更新已取消。"; return; }
 
     echo "正在停止服务..."; _sudo supervisorctl stop openlist
     local download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
@@ -184,15 +188,18 @@ do_uninstall_openlist() {
     read -p "请输入 'y' 确认: " confirm
     [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "卸载已取消。"; return; }
     
+    echo "1. 正在停止 OpenList 服务..."
     _sudo supervisorctl stop openlist >/dev/null 2>&1
+    echo "2. 正在从 Supervisor 中移除..."
     _sudo supervisorctl remove openlist >/dev/null 2>&1
+    echo "3. 正在删除 Supervisor 配置文件..."
     _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
     _sudo supervisorctl update >/dev/null 2>&1
-    echo "服务已停止并移除。"
+    echo "4. 正在删除程序文件和数据目录..."
     _sudo rm -rf "$DOWNLOAD_DIR"
-    echo "程序文件已删除。"
+    echo "5. 正在移除自动更新任务..."
     (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
-    echo "自动更新任务已移除。"
+    echo "6. 正在清理日志文件..."
     _sudo rm -f /var/log/openlist_*.log
     [ -L "$SYMLINK_PATH" ] && _sudo rm -f "$SYMLINK_PATH"
     echo -e "${GREEN_COLOR}OpenList 卸载完成。${RES}"
@@ -203,17 +210,17 @@ do_check_status() {
     if ! command -v supervisorctl >/dev/null 2>&1; then echo -e "${RED_COLOR}错误: supervisorctl 命令未找到。${RES}"; return; fi
     
     if _sudo supervisorctl status openlist 2>&1 | grep -q "RUNNING"; then
-        echo -e "状态: ${GREEN_COLOR}运行中${RES}"
+        echo -e "服务状态: ${GREEN_COLOR}运行中${RES}"
     else
-        echo -e "状态: ${RED_COLOR}已停止${RES}"
+        echo -e "服务状态: ${RED_COLOR}已停止${RES}"
     fi
 
     echo "--- 自动更新任务 ---"
     if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
         local job_line=$(crontab -l | grep "$CRON_JOB_COMMAND")
-        echo -e "状态: ${GREEN_COLOR}已开启${RES} (执行时间: ${job_line%%$CRON_JOB_COMMAND*})"
+        echo -e "任务状态: ${GREEN_COLOR}已开启${RES} (每日执行时间: ${job_line%%$CRON_JOB_COMMAND*})"
     else
-        echo -e "状态: ${RED_COLOR}未开启${RES}"
+        echo -e "任务状态: ${RED_COLOR}未开启${RES}"
     fi
 }
 
@@ -268,13 +275,15 @@ do_check_version_info() {
 do_set_auto_update() {
     echo "--- 设置自动更新 ---"
     if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
-        read -p "自动更新已开启，是否要关闭? (y/n): " confirm
+        echo -e "${YELLOW_COLOR}自动更新已开启，是否要关闭?${RES}"
+        read -p "请输入 'y' 确认: " confirm
         if [ "$confirm" = "y" ]; then
             (crontab -l | grep -vF "$CRON_JOB_COMMAND") | crontab -
             echo -e "${GREEN_COLOR}自动更新已关闭。${RES}"
         fi
     else
-        read -p "是否要开启自动更新? (y/n): " confirm
+        echo -e "${YELLOW_COLOR}是否要开启自动更新?${RES}"
+        read -p "请输入 'y' 确认: " confirm
         if [ "$confirm" = "y" ]; then
             echo "请输入每日检查更新的时间 (24小时制)，留空则使用默认(凌晨4点)。"
             read -p "小时 (0-23，默认 4): " hour
@@ -284,7 +293,8 @@ do_set_auto_update() {
             echo -e "${GREEN_COLOR}自动更新已开启，每日将在 ${hour:-4}:${min:-0} 执行。${RES}"
             
             if [ "$(cat /etc/timezone 2>/dev/null)" != "Asia/Shanghai" ]; then
-                read -p "检测到时区不是上海时间，是否设置? (y/n): " confirm_tz
+                echo -e "${YELLOW_COLOR}检测到时区不是上海时间，是否设置?${RES}"
+                read -p "请输入 'y' 确认: " confirm_tz
                 if [ "$confirm_tz" = "y" ]; then
                     if ! command -v setup-timezone >/dev/null 2>&1; then _sudo apk add --no-cache tzdata; fi
                     _sudo setup-timezone -z Asia/Shanghai; echo "时区已设置为 Asia/Shanghai。"
@@ -298,7 +308,7 @@ do_set_auto_update() {
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v7.0 - Alpine)${RES}"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v8.0 - Alpine)${RES}"
         echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
