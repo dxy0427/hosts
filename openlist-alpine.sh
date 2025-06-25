@@ -17,7 +17,6 @@ fi
 # Create symlink if it doesn't exist (referencing its actual location)
 if [ ! -L "$SYMLINK_PATH" ]; then
     echo "正在尝试创建符号链接 $SYMLINK_PATH 指向 $SCRIPT_DIR/$SCRIPT_NAME"
-    # Check write permission for /usr/local/bin
     if [ ! -w "/usr/local/bin" ]; then
         echo "需要 sudo 权限来创建符号链接到 /usr/local/bin/"
         if command -v sudo >/dev/null 2>&1; then
@@ -29,7 +28,7 @@ if [ ! -L "$SYMLINK_PATH" ]; then
         ln -s "$SCRIPT_DIR/$SCRIPT_NAME" "$SYMLINK_PATH"
     fi
 
-    if [ $? -ne 0 ] && [ ! -L "$SYMLINK_PATH" ]; then # Check again if link exists after trying
+    if [ $? -ne 0 ] && [ ! -L "$SYMLINK_PATH" ]; then
         echo "创建符号链接失败。脚本仍可直接运行，但 'openlist' 命令可能无效。"
     elif [ -L "$SYMLINK_PATH" ]; then
         echo "符号链接 $SYMLINK_PATH 创建成功。"
@@ -37,7 +36,6 @@ if [ ! -L "$SYMLINK_PATH" ]; then
 fi
 
 # --- Variables ---
-# Simplified architecture detection for amd64 and arm64 only
 ARCH_RAW=$(uname -m)
 case "$ARCH_RAW" in
     x86_64) ARCH="amd64" ;;
@@ -49,20 +47,17 @@ case "$ARCH_RAW" in
         ;;
 esac
 
-# Corrected filename format for OpenList based on user feedback
 OPENLIST_FILE="openlist-linux-musl-${ARCH}.tar.gz"
 DOWNLOAD_DIR="/opt/openlist"
 OPENLIST_BINARY="$DOWNLOAD_DIR/openlist"
 DATA_DIR="$DOWNLOAD_DIR/data"
-
-# Alpine default Supervisor config path
 SUPERVISOR_CONF_DIR="/etc/supervisor.d"
 OPENLIST_SUPERVISOR_CONF_FILE="$SUPERVISOR_CONF_DIR/openlist.ini"
 
 GREEN_COLOR="\033[32m"
 YELLOW_COLOR="\033[33m"
 RED_COLOR="\033[31m"
-RES="\033[0m" # Reset color
+RES="\033[0m"
 
 CRON_JOB_COMMAND="$SCRIPT_DIR/$SCRIPT_NAME auto-update"
 CRON_JOB_SCHEDULE="0 4 * * *" # 每天凌晨4点
@@ -75,11 +70,11 @@ ADMIN_PASS=""
 
 _sudo() {
     if [ "$(id -u)" -eq 0 ]; then
-        "$@" # Already root, execute directly
+        "$@"
     elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
     else
-        echo -e "${RED_COLOR}错误: 此操作需要 root 权限，并且 sudo 命令未找到。请使用 root 用户运行或安装 sudo。${RES}"
+        echo -e "${RED_COLOR}错误: 此操作需要 root 权限，并且 sudo 命令未找到。${RES}"
         return 1
     fi
     return $?
@@ -88,15 +83,10 @@ _sudo() {
 check_dependencies() {
     local missing_deps=""
     local dependencies="wget tar curl supervisor file"
-
     echo "正在检查依赖: $dependencies..."
     for dep in $dependencies; do
         if ! command -v "$dep" >/dev/null 2>&1; then
-            if [ "$dep" = "supervisor" ]; then
-                echo -e "${YELLOW_COLOR}警告: 依赖 supervisor 未找到。将在安装 OpenList 时尝试安装。${RES}"
-            else
-                missing_deps="$missing_deps $dep"
-            fi
+            missing_deps="$missing_deps $dep"
         fi
     done
 
@@ -112,37 +102,9 @@ check_dependencies() {
     return 0
 }
 
-cleanup_residuals() {
-    echo "正在清理残留进程和配置..."
-    openlist_pids=$(pgrep -f "$DOWNLOAD_DIR/openlist server")
-
-    if [ -n "$openlist_pids" ]; then
-        for pid in $openlist_pids; do
-            if echo "$pid" | grep -qE '^[0-9]+$'; then
-                echo "正在终止残留的 OpenList 进程 PID: $pid"
-                _sudo kill -9 "$pid"
-            fi
-        done
-    else
-        echo "未找到正在运行的 OpenList 进程。"
-    fi
-
-    if [ -f "$OPENLIST_SUPERVISOR_CONF_FILE" ]; then
-        echo "正在删除 Supervisor OpenList 配置文件: $OPENLIST_SUPERVISOR_CONF_FILE"
-        _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
-    fi
-    echo "残留进程和配置文件清理完成。"
-}
-
 get_current_version() {
     if [ -x "$OPENLIST_BINARY" ]; then
-        local version_output
-        version_output=$("$OPENLIST_BINARY" version 2>/dev/null)
-        if [ $? -ne 0 ] || [ -z "$version_output" ]; then
-            if [ -f "$OPENLIST_BINARY" ]; then
-                version_output=$(_sudo "$OPENLIST_BINARY" version 2>/dev/null)
-            fi
-        fi
+        local version_output=$(_sudo "$OPENLIST_BINARY" version 2>/dev/null)
         local version=$(echo "$version_output" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
         echo "${version:-未安装或无法获取}"
     else
@@ -152,73 +114,20 @@ get_current_version() {
 
 get_latest_version() {
     local url="https://api.github.com/repos/OpenListTeam/OpenList/releases/latest"
-    local latest_json
-    latest_json=$(curl -sL --connect-timeout 10 --retry 3 --retry-delay 3 --no-keepalive "$url" 2>/dev/null)
-
+    local latest_json=$(curl -sL --connect-timeout 10 "$url" 2>/dev/null)
     if [ -z "$latest_json" ] || echo "$latest_json" | grep -q "API rate limit exceeded"; then
-        echo "无法获取最新版本信息"
+        echo "无法获取"
     else
-        if command -v jq >/dev/null 2>&1; then
-            echo "$latest_json" | jq -r .tag_name
-        else
-            echo "$latest_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//; s/"$//'
-        fi
+        echo "$latest_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//; s/"$//'
     fi
 }
 
 version_gt() {
-    [ -z "$1" ] && return 1
-    [ -z "$2" ] && return 1
-    v1=$(echo "$1" | sed 's/^v//')
-    v2=$(echo "$2" | sed 's/^v//')
-    test "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n 1)" != "$v1"
-}
-
-check_install_dir() {
-    if [ -f "$OPENLIST_BINARY" ]; then
-        echo -e "${YELLOW_COLOR}OpenList 已安装在 $DOWNLOAD_DIR。如需重新安装，请先卸载或选择更新。${RES}"
-        return 1
-    fi
-
-    local parent_dir
-    parent_dir=$(dirname "$DOWNLOAD_DIR")
-    if [ ! -d "$parent_dir" ]; then
-        echo -e "${GREEN_COLOR}目录 $parent_dir 不存在，正在创建...${RES}"
-        if ! _sudo mkdir -p "$parent_dir"; then
-            echo -e "${RED_COLOR}错误：无法创建目录 $parent_dir。请检查权限。${RES}"
-            return 2
-        fi
-    fi
-
-    if [ -d "$DOWNLOAD_DIR" ]; then
-        read -p "${YELLOW_COLOR}安装目录 $DOWNLOAD_DIR 已存在但 OpenList 未完整安装。是否清空并继续？(y/n): ${RES}" confirm_clear
-        if [ "$confirm_clear" = "y" ] || [ "$confirm_clear" = "Y" ]; then
-            echo -e "${GREEN_COLOR}正在清空安装目录 $DOWNLOAD_DIR...${RES}"
-            _sudo rm -rf "$DOWNLOAD_DIR/*" "$DOWNLOAD_DIR/.*" 2>/dev/null
-            _sudo mkdir -p "$DOWNLOAD_DIR"
-        else
-            echo -e "${RED_COLOR}安装取消。${RES}"
-            return 3
-        fi
-    else
-        echo -e "${GREEN_COLOR}正在创建安装目录 $DOWNLOAD_DIR...${RES}"
-        if ! _sudo mkdir -p "$DOWNLOAD_DIR"; then
-            echo -e "${RED_COLOR}错误：无法创建安装目录 $DOWNLOAD_DIR。请检查权限。${RES}"
-            return 2
-        fi
-    fi
-    if [ ! -d "$DATA_DIR" ]; then
-        echo -e "${GREEN_COLOR}正在创建数据目录 $DATA_DIR...${RES}"
-        if ! _sudo mkdir -p "$DATA_DIR"; then
-            echo -e "${RED_COLOR}错误：无法创建数据目录 $DATA_DIR。请检查权限。${RES}"
-            return 2
-        fi
-    fi
-    echo -e "${GREEN_COLOR}安装目录准备就绪：$DOWNLOAD_DIR${RES}"
-    return 0
+    test "$(printf '%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2"
 }
 
 download_with_retry() {
+    # implementation kept from previous version
     local url="$1"
     local output_path="$2"
     local max_retries=3
@@ -231,7 +140,7 @@ download_with_retry() {
         if curl -L --connect-timeout 15 --retry 3 --retry-delay 5 "$url" -o "$output_path"; then
             if [ -s "$output_path" ]; then
                 if ! file "$output_path" | grep -q "gzip compressed data"; then
-                     echo -e "${YELLOW_COLOR}下载的文件不是有效的 gzip 压缩包 (尝试 $attempt/$max_retries)。可能是下载链接错误。${RES}"
+                     echo -e "${YELLOW_COLOR}下载的文件不是有效的 gzip 压缩包 (尝试 $attempt/$max_retries)。${RES}"
                      _sudo rm -f "$output_path"
                 else
                     echo -e "${GREEN_COLOR}下载成功。${RES}"
@@ -247,7 +156,6 @@ download_with_retry() {
         if [ $attempt -lt $max_retries ]; then
             echo -e "${YELLOW_COLOR}${wait_time} 秒后重试...${RES}"
             sleep $wait_time
-            wait_time=$((wait_time + 5))
         fi
     done
     echo -e "${RED_COLOR}下载失败 $max_retries 次尝试后。${RES}"
@@ -255,118 +163,34 @@ download_with_retry() {
     return 1
 }
 
-install_openlist_binary() {
-    echo -e "${GREEN_COLOR}是否使用 GitHub 代理进行下载？（默认无代理）${RES}"
-    echo -e "${GREEN_COLOR}代理地址示例： https://gh-proxy.com/ (必须 https 开头，斜杠 / 结尾)${RES}"
-    read -p "请输入代理地址或直接按回车继续: " proxy_input
+# --- Main Operations ---
 
-    local gh_download_url
-    if [ -n "$proxy_input" ]; then
-        if ! echo "$proxy_input" | grep -Eq '^https://.*/$'; then
-            echo -e "${RED_COLOR}代理地址格式不正确。必须以 https:// 开头并以 / 结尾。${RES}"
-            echo -e "${YELLOW_COLOR}将不使用代理进行下载。${RES}"
-            proxy_input=""
-        fi
+do_install_openlist() {
+    if [ "$(get_current_version)" != "未安装" ]; then
+        echo -e "${YELLOW_COLOR}OpenList 已安装，如需重装请先卸载。${RES}"
+        return
     fi
-
-    local latest_version_for_dl=$(get_latest_version "")
-    if echo "$latest_version_for_dl" | grep -q "无法获取"; then
-        echo -e "${RED_COLOR}无法获取最新版本信息，无法确定下载链接。安装中止。${RES}"
-        return 1
+    check_dependencies || return 1
+    
+    local latest_version=$(get_latest_version)
+    if [ "$latest_version" = "无法获取" ]; then
+        echo -e "${RED_COLOR}无法获取最新版本信息，安装中止。${RES}"; return 1
     fi
-
-    if [ -n "$proxy_input" ]; then
-        gh_download_url="${proxy_input}https://github.com/OpenListTeam/OpenList/releases/download/${latest_version_for_dl}/$OPENLIST_FILE"
-        echo -e "${GREEN_COLOR}使用代理地址: $proxy_input${RES}"
-    else
-        gh_download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version_for_dl}/$OPENLIST_FILE"
-        echo -e "${GREEN_COLOR}使用默认 GitHub 地址进行下载${RES}"
-    fi
-
-    local temp_download_path="/tmp/$OPENLIST_FILE"
-    if ! download_with_retry "$gh_download_url" "$temp_download_path"; then
-        return 1
-    fi
-
-    echo -e "${GREEN_COLOR}正在解压 $temp_download_path 到 $DOWNLOAD_DIR...${RES}"
-    if [ ! -d "$DOWNLOAD_DIR" ]; then _sudo mkdir -p "$DOWNLOAD_DIR"; fi
-    if ! _sudo tar zxf "$temp_download_path" -C "$DOWNLOAD_DIR/"; then
-        echo -e "${RED_COLOR}解压失败！请检查下载的文件或手动解压。${RES}"
-        _sudo rm -f "$temp_download_path"
-        return 1
-    fi
-    _sudo rm -f "$temp_download_path"
-
-    if [ -f "$OPENLIST_BINARY" ]; then
-        echo -e "${GREEN_COLOR}OpenList 二进制文件已解压到 $OPENLIST_BINARY${RES}"
-        _sudo chmod +x "$OPENLIST_BINARY"
-
-        echo -e "${GREEN_COLOR}正在获取初始管理员凭据...${RES}"
-        local account_info_output
-        account_info_output=$(_sudo "$OPENLIST_BINARY" admin random --data "$DATA_DIR" 2>&1)
-
-        ADMIN_USER=$(echo "$account_info_output" | awk -F': ' '/username:/ {print $2; exit}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        ADMIN_PASS=$(echo "$account_info_output" | awk -F': ' '/password:/ {print $2; exit}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-        if [ -z "$ADMIN_USER" ] || [ -z "$ADMIN_PASS" ]; then
-            echo -e "${YELLOW_COLOR}警告: 未能自动从以下输出中提取管理员用户名或密码。请稍后手动重置。${RES}"
-            echo "$account_info_output"
-        fi
-    else
-        echo -e "${RED_COLOR}安装失败：OpenList 二进制文件 $OPENLIST_BINARY 未找到。${RES}"
-        return 1
-    fi
-    return 0
-}
-
-setup_supervisor() {
+    
+    _sudo mkdir -p "$DOWNLOAD_DIR" "$DATA_DIR"
+    
+    local download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
+    local temp_path="/tmp/$OPENLIST_FILE"
+    download_with_retry "$download_url" "$temp_path" || return 1
+    
+    echo "正在解压..."
+    _sudo tar zxf "$temp_path" -C "$DOWNLOAD_DIR/" || { echo -e "${RED_COLOR}解压失败!${RES}"; _sudo rm -f "$temp_path"; return 1; }
+    _sudo rm -f "$temp_path"
+    _sudo chmod +x "$OPENLIST_BINARY"
+    
+    # Setup Supervisor
     echo "正在配置 Supervisor..."
-    if ! command -v supervisord >/dev/null 2>&1; then
-        echo "Supervisor 未安装，正在尝试安装..."
-        if ! _sudo apk add --no-cache supervisor; then
-            echo -e "${RED_COLOR}错误: 安装 supervisor 失败。请手动安装 supervisor。${RES}"
-            return 1
-        fi
-        echo "Supervisor 安装成功。"
-    fi
-
-    local main_supervisor_conf="/etc/supervisord.conf"
-
-    if [ ! -f "$main_supervisor_conf" ]; then
-        echo "Supervisor 主配置文件 $main_supervisor_conf 未找到。正在创建默认配置..."
-        if ! _sudo sh -c "echo_supervisord_conf > $main_supervisor_conf"; then
-             echo -e "${RED_COLOR}错误: 创建默认 Supervisor 配置文件失败。${RES}"
-             return 1
-        fi
-        _sudo sh -c "echo \"\n[include]\nfiles = /etc/supervisor.d/*.ini\" >> \"$main_supervisor_conf\""
-        echo "默认 Supervisor 配置文件已创建并配置 include 指向 /etc/supervisor.d/。"
-    else
-        echo "检查现有的 Supervisor 主配置文件 $main_supervisor_conf ..."
-        local include_correct=false
-        if _sudo grep -q "\[include\]" "$main_supervisor_conf"; then
-            if _sudo grep -Eq "^\s*files\s*=\s*(/etc/supervisor.d/\*.ini|supervisor.d/\*.ini)" "$main_supervisor_conf"; then
-                include_correct=true
-                echo "主配置文件中的 [include] 部分已正确配置。"
-            fi
-        fi
-
-        if [ "$include_correct" = false ]; then
-            echo "警告: $main_supervisor_conf 中的 [include] 部分未正确配置或未找到。"
-            _sudo sed -i '/^\[include\]/d' "$main_supervisor_conf"
-            _sudo sed -i '/^\s*files\s*=/d' "$main_supervisor_conf"
-            echo "正在添加 [include] files = /etc/supervisor.d/*.ini ..."
-            _sudo sh -c "echo -e \"\n[include]\nfiles = /etc/supervisor.d/*.ini\" >> \"$main_supervisor_conf\""
-            echo "已尝试修正 $main_supervisor_conf。"
-        fi
-    fi
-
-    if [ ! -d "$SUPERVISOR_CONF_DIR" ]; then
-        echo "正在创建 Supervisor 配置目录: $SUPERVISOR_CONF_DIR"
-        _sudo mkdir -p "$SUPERVISOR_CONF_DIR"
-    fi
-
-    echo "正在创建 OpenList Supervisor 配置文件: $OPENLIST_SUPERVISOR_CONF_FILE"
-_sudo sh -c "cat > \"$OPENLIST_SUPERVISOR_CONF_FILE\"" << EOF
+    _sudo sh -c "cat > '$OPENLIST_SUPERVISOR_CONF_FILE'" << EOF
 [program:openlist]
 directory=$DOWNLOAD_DIR
 command=$OPENLIST_BINARY server --data $DATA_DIR
@@ -375,265 +199,101 @@ autorestart=true
 startsecs=5
 stopsignal=QUIT
 stdout_logfile=/var/log/openlist_stdout.log
-stdout_logfile_maxbytes=10MB
-stdout_logfile_backups=3
 stderr_logfile=/var/log/openlist_stderr.log
-stderr_logfile_maxbytes=10MB
-stderr_logfile_backups=3
 environment=GIN_MODE=release
-; user=nobody
 EOF
-
-    echo "正在尝试 (重新) 启动 Supervisor 服务并加载新配置..."
-    if command -v rc-service >/dev/null 2>&1; then
-        echo "使用 rc-service 重启 supervisord..."
-        _sudo rc-service supervisord restart
-        sleep 3
-        if ! _sudo rc-service supervisord status | grep -q "started"; then
-             echo -e "${YELLOW_COLOR}Supervisord 服务未能通过 rc-service 启动。尝试直接启动...${RES}"
-             _sudo supervisord -c "$main_supervisor_conf"
-             sleep 2
-        fi
-    else
-        echo "尝试 pkill 并重启 supervisord..."
-        _sudo pkill supervisord
-        sleep 1
-        _sudo supervisord -c "$main_supervisor_conf"
-        sleep 2
-    fi
-
-    if ! pgrep -x "supervisord" > /dev/null; then
-        echo -e "${RED_COLOR}Supervisord 守护进程未能启动。请检查 Supervisor 日志。${RES}"
-        return 1
-    fi
-
-    echo "正在更新 Supervisor 配置 (reread, update)..."
-    _sudo supervisorctl reread
-    _sudo supervisorctl update
-
-    echo "尝试启动 openlist 程序..."
-    _sudo supervisorctl start openlist
-
-    sleep 3
+    _sudo supervisorctl reread && _sudo supervisorctl update && _sudo supervisorctl start openlist
+    
+    sleep 2
     if ! _sudo supervisorctl status openlist | grep -q "RUNNING"; then
-        echo -e "${RED_COLOR}错误: OpenList 未能通过 Supervisor 正常启动。请检查日志。${RES}"
-        _sudo supervisorctl status
-        echo -e "\n${YELLOW_COLOR}--- OpenList 标准输出日志 (/var/log/openlist_stdout.log) ---${RES}"
-        if [ -f "/var/log/openlist_stdout.log" ]; then _sudo tail -n 30 "/var/log/openlist_stdout.log"; else echo "文件未找到。"; fi
-        echo -e "\n${YELLOW_COLOR}--- OpenList 错误输出日志 (/var/log/openlist_stderr.log) ---${RES}"
-        if [ -f "/var/log/openlist_stderr.log" ]; then _sudo tail -n 30 "/var/log/openlist_stderr.log"; else echo "文件未找到。"; fi
-        return 1
-    fi
-
-    echo -e "${GREEN_COLOR}OpenList 已通过 Supervisor 配置并启动。${RES}"
-    return 0
-}
-
-installation_summary() {
-    clear
-    echo -e "${GREEN_COLOR}=============================================${RES}"
-    echo -e "${GREEN_COLOR}      OpenList 安装成功! 🎉 ${RES}"
-    echo -e "${GREEN_COLOR}=============================================${RES}"
-
-    local local_ip
-    local_ip=$(ip addr show | grep -w inet | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -n1)
-    local public_ipv4
-    public_ipv4=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 ifconfig.me || echo "获取失败")
-    local public_ipv6
-    public_ipv6=$(curl -s6 --connect-timeout 5 ip.sb 2>/dev/null || curl -s6 --connect-timeout 5 ifconfig.me 2>/dev/null || echo "获取失败")
-
-    echo "  访问地址:"
-    if [ -n "$local_ip" ]; then
-        echo "    局域网:   http://${local_ip}:5244/"
+        echo -e "${RED_COLOR}OpenList 服务启动失败，请检查日志。${RES}"
     else
-        echo "    局域网:   无法自动获取，请使用 'ip addr' 查看"
+        echo -e "${GREEN_COLOR}OpenList 安装并启动成功!${RES}"
+        installation_summary
     fi
-    if [ "$public_ipv4" != "获取失败" ]; then
-        echo "    公网 IPv4: http://${public_ipv4}:5244/"
-    fi
-    if [ "$public_ipv6" != "获取失败" ] && [ -n "$public_ipv6" ]; then
-        echo "    公网 IPv6: http://[${public_ipv6}]:5244/"
-    fi
-    echo "  配置文件: $DATA_DIR/config.json"
-    echo "  OpenList 日志: /var/log/openlist_stdout.log (及 stderr.log)"
-    echo "  Supervisor 配置: $OPENLIST_SUPERVISOR_CONF_FILE"
-
-    if [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ]; then
-        echo -e "\n  ${YELLOW_COLOR}重要: 初始管理员凭据:${RES}"
-        echo -e "    用户名: ${GREEN_COLOR}$ADMIN_USER${RES}"
-        echo -e "    密  码: ${GREEN_COLOR}$ADMIN_PASS${RES}"
-        echo -e "  ${YELLOW_COLOR}请登录后立即修改密码！${RES}"
-    else
-        echo -e "\n  ${YELLOW_COLOR}警告: 未能获取初始管理员密码。请使用 '$OPENLIST_BINARY admin' 或 '$SYMLINK_PATH admin' 手动设置或查看日志。${RES}"
-    fi
-
-    if command -v rc-update >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1; then
-        if ! rc-update show default | grep -q 'supervisord'; then
-            echo -e "\n  ${GREEN_COLOR}将 Supervisor 添加到开机启动项...${RES}"
-            _sudo rc-update add supervisord default
-        else
-            echo -e "\n  Supervisor 已在开机启动项中。"
-        fi
-    else
-        echo -e "\n  ${YELLOW_COLOR}警告: rc-update 或 rc-service 命令未找到。请手动将 Supervisor 添加到开机启动。${RES}"
-    fi
-
-    echo -e "\n  管理命令: 在任意目录输入 ${GREEN_COLOR}openlist${RES} (如果符号链接成功) 或 ${GREEN_COLOR}\"$SCRIPT_DIR/$SCRIPT_NAME\"${RES} 打开管理菜单。"
-    echo -e "\n  ${YELLOW_COLOR}温馨提示：如果端口无法访问，请检查服务器安全组、防火墙 (例如 ufw, firewalld) 和 OpenList 服务状态。${RES}"
-}
-
-# --- Main Operations ---
-
-do_install_openlist() {
-    local current_version
-    current_version=$(get_current_version)
-    if [ "$current_version" != "未安装" ] && [ "$current_version" != "未安装或无法获取" ]; then
-        echo "OpenList 已安装，当前版本为 $current_version。"
-        echo "如需重新安装，请先卸载。"
-        return
-    fi
-
-    read -p "即将开始安装 OpenList。是否继续？(y/n): " confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo "安装操作已取消。"
-        return
-    fi
-
-    echo "步骤 1: 检查依赖..."
-    if ! check_dependencies; then return 1; fi
-
-    echo "步骤 2: 清理可能存在的残留..."
-    cleanup_residuals
-
-    echo "步骤 3: 检查并准备安装目录..."
-    if ! check_install_dir; then return 1; fi
-
-    echo "步骤 4: 下载并安装 OpenList 二进制文件..."
-    if ! install_openlist_binary; then return 1; fi
-
-    echo "步骤 5: 配置 Supervisor..."
-    if ! setup_supervisor; then return 1; fi
-
-    installation_summary
 }
 
 do_update_openlist() {
-    local current_version
-    current_version=$(get_current_version)
-    if [ "$current_version" = "未安装" ] || [ "$current_version" = "未安装或无法获取" ]; then
-        echo "OpenList 未安装，无法进行更新。请先安装。"
-        return
+    local current_version=$(get_current_version)
+    if [ "$current_version" = "未安装" ]; then
+        echo -e "${RED_COLOR}OpenList 未安装，无法更新。${RES}"; return
     fi
-
-    echo -e "${GREEN_COLOR}正在检查最新版本...${RES}"
-    local latest_version
-    latest_version=$(get_latest_version "")
-
-    if echo "$latest_version" | grep -q "无法获取"; then
-        echo -e "${RED_COLOR}无法获取最新版本信息。更新操作取消。${RES}"
-        return
+    
+    local latest_version=$(get_latest_version)
+    if [ "$latest_version" = "无法获取" ]; then
+        echo -e "${RED_COLOR}无法获取最新版本信息。${RES}"; return
     fi
-
+    
     echo "当前版本: $current_version, 最新版本: $latest_version"
     if ! version_gt "$latest_version" "$current_version"; then
-        echo -e "${GREEN_COLOR}当前已是最新版本 ($current_version)，无需更新。${RES}"
-        return
+        echo -e "${GREEN_COLOR}当前已是最新版本，无需更新。${RES}"; return
     fi
 
-    read -p "${YELLOW_COLOR}检测到新版本 $latest_version。是否进行更新？(y/n): ${RES}" confirm_update
-    if [ "$confirm_update" != "y" ] && [ "$confirm_update" != "Y" ]; then
-        echo "更新操作已取消。"
-        return
-    fi
+    read -p "检测到新版本 ${latest_version}，是否更新? (y/n): " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "更新已取消。"; return; }
 
-    echo -e "${GREEN_COLOR}开始更新 OpenList 至版本 $latest_version ...${RES}"
+    echo "正在停止 OpenList 服务..."
     _sudo supervisorctl stop openlist
-    
-    local backup_path="/tmp/openlist_backup_$(date +%s)"
-    echo "备份当前 OpenList 二进制文件到 $backup_path..."
-    if [ -f "$OPENLIST_BINARY" ]; then
-        _sudo cp "$OPENLIST_BINARY" "$backup_path"
-    fi
-    
-    # Update download logic
-    local temp_download_path="/tmp/$OPENLIST_FILE"
-    local gh_download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
-    if ! download_with_retry "$gh_download_url" "$temp_download_path"; then
-        echo -e "${RED_COLOR}下载新版本失败。${RES}"
-        _sudo supervisorctl start openlist
-        return 1
-    fi
+
+    local download_url="https://github.com/OpenListTeam/OpenList/releases/download/${latest_version}/$OPENLIST_FILE"
+    local temp_path="/tmp/$OPENLIST_FILE"
+    download_with_retry "$download_url" "$temp_path" || { _sudo supervisorctl start openlist; return 1; }
     
     _sudo rm -f "$OPENLIST_BINARY"
-    if ! _sudo tar zxf "$temp_download_path" -C "$DOWNLOAD_DIR/"; then
-        echo -e "${RED_COLOR}解压新版本失败。${RES}"
-        if [ -f "$backup_path" ]; then _sudo cp "$backup_path" "$OPENLIST_BINARY"; fi
-        _sudo supervisorctl start openlist
-        return 1
-    fi
-    _sudo rm -f "$temp_download_path"
+    echo "正在解压新版本..."
+    _sudo tar zxf "$temp_path" -C "$DOWNLOAD_DIR/" || { echo -e "${RED_COLOR}解压失败!${RES}"; _sudo rm -f "$temp_path"; _sudo supervisorctl start openlist; return 1; }
+    _sudo rm -f "$temp_path"
     _sudo chmod +x "$OPENLIST_BINARY"
-    if [ -f "$backup_path" ]; then _sudo rm -f "$backup_path"; fi
     
-    _sudo supervisorctl restart openlist
+    echo "正在重启 OpenList 服务..."
+    _sudo supervisorctl start openlist
     
-    local new_current_version=$(get_current_version)
-    echo -e "${GREEN_COLOR}OpenList 更新成功！当前版本: $new_current_version${RES}"
+    sleep 2
+    local new_version=$(get_current_version)
+    echo -e "${GREEN_COLOR}OpenList 更新成功！当前版本: $new_version${RES}"
 }
 
 do_uninstall_openlist() {
-    echo -e "${RED_COLOR}警告：此操作将删除 OpenList 程序、相关配置和 Supervisor 条目。${RES}"
-    read -p "你确定要卸载 OpenList 并删除所有相关文件吗？(y/n): " confirm_uninstall
-    if [ "$confirm_uninstall" != "y" ] && [ "$confirm_uninstall" != "Y" ]; then
-        echo "卸载操作已取消。"
-        return
-    fi
-
-    _sudo supervisorctl stop openlist
-    _sudo supervisorctl remove openlist
+    read -p "${RED_COLOR}警告：此操作将删除所有 OpenList 文件和配置，是否继续? (y/n): ${RES}" confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "卸载已取消。"; return; }
+    
+    _sudo supervisorctl stop openlist >/dev/null 2>&1
+    _sudo supervisorctl remove openlist >/dev/null 2>&1
     _sudo rm -f "$OPENLIST_SUPERVISOR_CONF_FILE"
-    _sudo supervisorctl reread
-    _sudo supervisorctl update
+    _sudo supervisorctl update >/dev/null 2>&1
     _sudo rm -rf "$DOWNLOAD_DIR"
     (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
-    if [ -f "/etc/environment" ]; then
-        _sudo sed -i '/^OPENLIST_AUTO_UPDATE_PROXY=/d' /etc/environment
-    fi
     _sudo rm -f /var/log/openlist_*.log
-    if [ -L "$SYMLINK_PATH" ]; then _sudo rm -f "$SYMLINK_PATH"; fi
+    [ -L "$SYMLINK_PATH" ] && _sudo rm -f "$SYMLINK_PATH"
     echo -e "${GREEN_COLOR}OpenList 卸载完成。${RES}"
 }
 
 do_check_status() {
     echo "--- OpenList 服务状态 (Supervisor) ---"
     if ! command -v supervisorctl >/dev/null 2>&1; then
-        echo "supervisorctl 命令未找到。"
-        return
+        echo -e "${RED_COLOR}错误: supervisorctl 命令未找到。${RES}"; return
     fi
     
-    local status_output
-    status_output=$(_sudo supervisorctl status openlist 2>&1)
-    
+    local status_output=$(_sudo supervisorctl status openlist 2>&1)
     if echo "$status_output" | grep -q "RUNNING"; then
-        echo -e "${GREEN_COLOR}状态: 运行中${RES}"
+        echo -e "状态: ${GREEN_COLOR}运行中${RES}"
     elif echo "$status_output" | grep -q "STOPPED" || echo "$status_output" | grep -q "EXITED"; then
-        echo -e "${RED_COLOR}状态: 已停止${RES}"
-    elif echo "$status_output" | grep -q "STARTING"; then
-        echo -e "${YELLOW_COLOR}状态: 启动中${RES}"
-    elif echo "$status_output" | grep -q "FATAL"; then
-        echo -e "${RED_COLOR}状态: 启动失败 (FATAL)${RES}"
+        echo -e "状态: ${RED_COLOR}已停止${RES}"
     else
-        echo "状态: 未知 (可能是未安装)"
+        echo -e "状态: ${YELLOW_COLOR}未知 (或未安装)${RES}"
     fi
-    echo "Supervisor 原始输出: $status_output"
+
+    echo "--- 自动更新任务 ---"
+    if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
+        echo -e "状态: ${GREEN_COLOR}已开启${RES}"
+    else
+        echo -e "状态: ${RED_COLOR}未开启${RES}"
+    fi
 }
 
 do_reset_password() {
-    if [ ! -f "$OPENLIST_BINARY" ]; then
-        echo -e "${RED_COLOR}错误：OpenList 未安装。${RES}"
-        return 1
-    fi
-
+    if [ ! -f "$OPENLIST_BINARY" ]; then echo -e "${RED_COLOR}OpenList 未安装。${RES}"; return; fi
+    
     echo -e "\n请选择密码重置方式:"
     echo "  1. 生成随机密码"
     echo "  2. 设置新密码"
@@ -642,22 +302,21 @@ do_reset_password() {
     case "$choice" in
         1)
             echo "正在生成随机密码..."
-            _sudo "$OPENLIST_BINARY" admin random --data "$DATA_DIR"
+            local output=$(_sudo "$OPENLIST_BINARY" admin random --data "$DATA_DIR" 2>&1)
+            local user=$(echo "$output" | grep "username:" | awk '{print $NF}')
+            local pass=$(echo "$output" | grep "password:" | awk '{print $NF}')
+            echo -e "${GREEN_COLOR}账号：${RES}${user}"
+            echo -e "${GREEN_COLOR}密码：${RES}${pass}"
             ;;
         2)
-            read -sp "请输入新密码: " new_pass
-            echo
-            if [ -z "$new_pass" ]; then
-                echo -e "${RED_COLOR}密码不能为空。${RES}"
-                return
-            fi
+            read -p "请输入新密码: " new_pass
+            if [ -z "$new_pass" ]; then echo -e "${RED_COLOR}密码不能为空。${RES}"; return; fi
             echo "正在为 'admin' 用户设置新密码..."
-            _sudo "$OPENLIST_BINARY" admin set "$new_pass" --data "$DATA_DIR"
-            echo -e "${GREEN_COLOR}密码设置成功。${RES}"
+            _sudo "$OPENLIST_BINARY" admin set "$new_pass" --data "$DATA_DIR" >/dev/null 2>&1
+            echo -e "${GREEN_COLOR}账号：${RES}admin"
+            echo -e "${GREEN_COLOR}密码：${RES}${new_pass}"
             ;;
-        *)
-            echo -e "${RED_COLOR}无效的选项。${RES}"
-            ;;
+        *) echo -e "${RED_COLOR}无效的选项。${RES}";;
     esac
 }
 
@@ -669,28 +328,19 @@ control_service() {
         stop) action_cn="停止" ;;
         restart) action_cn="重启" ;;
     esac
-
-    echo "正在尝试 ${action_cn} OpenList 服务..."
-    if ! command -v supervisorctl >/dev/null 2>&1; then echo "supervisorctl 命令未找到。"; return 1; fi
     
-    local output
-    output=$(_sudo supervisorctl "${action}" openlist 2>&1)
-
+    local output=$(_sudo supervisorctl "$action" openlist 2>&1)
     if echo "$output" | grep -q "ERROR (already started)"; then
         echo -e "${YELLOW_COLOR}操作提示: 服务已在运行，无需重复启动。${RES}"
     elif echo "$output" | grep -q "ERROR (not running)"; then
-        echo -e "${YELLOW_COLOR}操作提示: 服务未在运行。${RES}"
-        # If restarting a non-running service, it will start it
-        if [ "$action" = "restart" ] && echo "$output" | grep -q "started"; then
-            echo -e "${GREEN_COLOR}操作成功: 服务已启动。${RES}"
-        fi
+        echo -e "${YELLOW_COLOR}操作提示: 服务当前未运行。${RES}"
+        if [ "$action" = "restart" ]; then echo -e "${GREEN_COLOR}操作成功: 服务已启动。${RES}"; fi
     elif echo "$output" | grep -q "started"; then
         echo -e "${GREEN_COLOR}操作成功: 服务已${action_cn}。${RES}"
     elif echo "$output" | grep -q "stopped"; then
         echo -e "${GREEN_COLOR}操作成功: 服务已停止。${RES}"
     else
         echo -e "${RED_COLOR}操作失败或状态未知。${RES}"
-        echo "原始输出: $output"
     fi
 }
 
@@ -699,28 +349,43 @@ do_stop_service() { control_service "stop"; }
 do_restart_service() { control_service "restart"; }
 
 do_check_version_info() {
-    local current_version_info
-    current_version_info=$(get_current_version)
-    echo -e "${GREEN_COLOR}当前安装版本: ${current_version_info}${RES}"
-    echo -e "${YELLOW_COLOR}正在检查最新版本...${RES}"
-    local latest_version_info
-    latest_version_info=$(get_latest_version)
-    echo -e "最新可用版本: ${latest_version_info:-获取失败}${RES}"
+    local current_version=$(get_current_version)
+    local latest_version=$(get_latest_version)
+    echo -e "${GREEN_COLOR}当前安装版本: ${current_version}${RES}"
+    echo -e "${YELLOW_COLOR}最新可用版本: ${latest_version}${RES}"
 }
 
 do_set_auto_update() {
-    echo "--- 设置 OpenList 自动更新 ---"
-    read -p "是否开启每日自动更新？(y/n): " confirm
-    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-        (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND"; echo "$CRON_JOB") | crontab -
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN_COLOR}已开启每日凌晨 4 点自动更新。${RES}"
+    echo "--- 设置自动更新 (每日凌晨4点) ---"
+    if crontab -l 2>/dev/null | grep -qF "$CRON_JOB_COMMAND"; then
+        read -p "自动更新已开启，是否要关闭? (y/n): " confirm_disable
+        if [ "$confirm_disable" = "y" ] || [ "$confirm_disable" = "Y" ]; then
+            (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
+            echo -e "${GREEN_COLOR}自动更新已关闭。${RES}"
         else
-            echo -e "${RED_COLOR}设置 cron 任务失败。${RES}"
+            echo "操作已取消。"
         fi
     else
-        (crontab -l 2>/dev/null | grep -vF "$CRON_JOB_COMMAND") | crontab -
-        echo "已关闭自动更新。"
+        read -p "是否要开启自动更新? (y/n): " confirm_enable
+        if [ "$confirm_enable" = "y" ] || [ "$confirm_enable" = "Y" ]; then
+            (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+            echo -e "${GREEN_COLOR}自动更新已开启。${RES}"
+            
+            # Timezone setting
+            if [ "$(cat /etc/timezone 2>/dev/null)" != "Asia/Shanghai" ]; then
+                read -p "检测到系统时区不是上海时间，是否设置为上海时间? (y/n): " confirm_tz
+                if [ "$confirm_tz" = "y" ] || [ "$confirm_tz" = "Y" ]; then
+                    if ! command -v setup-timezone >/dev/null 2>&1; then
+                        echo "正在安装时区工具 tzdata..."
+                        _sudo apk add --no-cache tzdata
+                    fi
+                    _sudo setup-timezone -z Asia/Shanghai
+                    echo "时区已设置为 Asia/Shanghai。"
+                fi
+            fi
+        else
+            echo "操作已取消。"
+        fi
     fi
 }
 
@@ -728,7 +393,7 @@ do_set_auto_update() {
 main_menu() {
     while true; do
         clear
-        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v4.0 - Alpine)${RES}"
+        echo -e "\n${GREEN_COLOR}OpenList 管理脚本 (v5.0 - Alpine)${RES}"
         echo "=========================================="
         echo " 1. 安装 OpenList           2. 更新 OpenList"
         echo " 3. 卸载 OpenList           4. 查看状态"
@@ -761,7 +426,10 @@ main_menu() {
 
 # --- Script Entry Point ---
 if [ "$1" = "auto-update" ]; then
-    # Auto-update logic would go here
+    # This is for the cron job, it runs non-interactively
+    LOG_FILE="/var/log/openlist_autoupdate.log"
+    echo "--- Auto-Update Starting: $(date) ---" >> "$LOG_FILE"
+    do_update_openlist >> "$LOG_FILE" 2>&1
     exit 0
 fi
 
