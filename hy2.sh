@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Hysteria 2 Management Script for Alpine Linux (v1.5)
-# FIX: Use the stable redirect URL for latest version download.
+# Hysteria 2 Management Script for Alpine Linux (v1.6)
+# FIX: Correctly generate multi-line YAML config snippets.
 
 # --- Formatting ---
 C_RED='\033[0;31m'
@@ -76,7 +76,6 @@ install_hysteria() {
 
   case $choice in
     1)
-      # [FIX v1.5] Use the stable redirect URL as requested. This is more reliable.
       DOWNLOAD_URL="https://download.hysteria.network/app/latest/hysteria-linux-amd64"
       ;;
     2)
@@ -144,13 +143,18 @@ configure_hysteria() {
   OBFS_SCHEME=""
   if [ "$ENABLE_OBFS" = "y" ]; then
     read -p "请输入混淆密码: " OBFS_PASSWORD
-    OBFS_CONFIG="obfs:\n  type: salamander\n  salamander:\n    password: ${OBFS_PASSWORD}"
+    # [FIX v1.6] Use proper multi-line string assignment for YAML
+    OBFS_CONFIG="obfs:
+  type: salamander
+  salamander:
+    password: ${OBFS_PASSWORD}"
     OBFS_PASS_ENCODED=$(echo -n "$OBFS_PASSWORD" | xxd -p | tr -d '\n')
     OBFS_SCHEME="&obfs=salamander&obfs-password=${OBFS_PASS_ENCODED}"
   fi
 
   read -p "是否开启协议嗅探 (Sniffing)? [y/N]: " ENABLE_SNIFF
   SNIFF_CONFIG=""
+  # [FIX v1.6] Use proper multi-line string assignment for YAML
   [ "$ENABLE_SNIFF" = "y" ] && SNIFF_CONFIG="sniff:\n  enabled: true"
 
   clear
@@ -170,7 +174,11 @@ configure_hysteria() {
     1)
       read -p "请输入您的域名: " CERT_DOMAIN
       read -p "请输入您的邮箱: " CERT_EMAIL
-      ACME_CONFIG="acme:\n  domains:\n    - ${CERT_DOMAIN}\n  email: ${CERT_EMAIL}"
+      # [FIX v1.6] Use proper multi-line string assignment for YAML
+      ACME_CONFIG="acme:
+  domains:
+    - ${CERT_DOMAIN}
+  email: ${CERT_EMAIL}"
       SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
       ;;
     2)
@@ -180,7 +188,10 @@ configure_hysteria() {
       openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
         -keyout "${HY2_DIR}/server.key" -out "${HY2_DIR}/server.crt" \
         -subj "/CN=${CERT_CN}" -days 3650
-      TLS_CONFIG="tls:\n  cert: ${HY2_DIR}/server.crt\n  key: ${HY2_DIR}/server.key"
+      # [FIX v1.6] Use proper multi-line string assignment for YAML
+      TLS_CONFIG="tls:
+  cert: ${HY2_DIR}/server.crt
+  key: ${HY2_DIR}/server.key"
       INSECURE="1"; SNI="$CERT_CN"
       read -p "请输入服务器的 IP 地址或域名 (用于客户端连接): " SERVER_NAME
       ;;
@@ -188,7 +199,10 @@ configure_hysteria() {
       read -p "请输入证书文件 (.crt) 的完整路径: " CERT_PATH
       read -p "请输入私钥文件 (.key) 的完整路径: " KEY_PATH
       read -p "请输入您的域名 (用于 SNI): " CERT_DOMAIN
-      TLS_CONFIG="tls:\n  cert: ${CERT_PATH}\n  key: ${KEY_PATH}"
+      # [FIX v1.6] Use proper multi-line string assignment for YAML
+      TLS_CONFIG="tls:
+  cert: ${CERT_PATH}
+  key: ${KEY_PATH}"
       SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
       ;;
     *) print_error "无效选择，配置中止。"; press_any_key; return ;;
@@ -212,17 +226,22 @@ configure_hysteria() {
   mkdir -p "$HY2_DIR"
   cat << EOF > "$HY2_CONFIG_FILE"
 listen: :${LISTEN_PORT}
+
 ${ACME_CONFIG}
 ${TLS_CONFIG}
+
 auth:
   type: password
   password: ${AUTH_PASSWORD}
+
 masquerade:
   type: proxy
   proxy:
     url: ${MASQUERADE_URL}
     rewriteHost: true
+
 ignoreClientBandwidth: ${IGNORE_CLIENT_BANDWIDTH}
+
 ${OBFS_CONFIG}
 ${SNIFF_CONFIG}
 EOF
