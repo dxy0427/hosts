@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Hysteria 2 Management Script for Alpine Linux (v1.6)
-# FIX: Correctly generate multi-line YAML config snippets.
+# Hysteria 2 Management Script for Alpine Linux (v1.7)
+# FIX: Add validation for masquerade URL input to prevent empty value.
 
 # --- Formatting ---
 C_RED='\033[0;31m'
@@ -133,8 +133,11 @@ configure_hysteria() {
   read -p "请输入监听端口 [1-65535]: " LISTEN_PORT
   read -p "请输入认证密码 (留空则随机生成): " AUTH_PASSWORD
   [ -z "$AUTH_PASSWORD" ] && AUTH_PASSWORD=$(head -c 16 /dev/urandom | base64 | tr -d '=+/' )
-  read -p "请输入伪装的 URL (例如: https://bing.com): " MASQUERADE_URL
   
+  # [FIX v1.7] Add input validation and default value for masquerade URL.
+  read -p "请输入伪装的 URL (默认: https://bing.com): " MASQUERADE_URL
+  [ -z "$MASQUERADE_URL" ] && MASQUERADE_URL="https://bing.com"
+
   read -p "是否开启 Brutal 模式? [y/N]: " ENABLE_BRUTAL
   IGNORE_CLIENT_BANDWIDTH=$([ "$ENABLE_BRUTAL" = "y" ] && echo "false" || echo "true")
   
@@ -143,7 +146,6 @@ configure_hysteria() {
   OBFS_SCHEME=""
   if [ "$ENABLE_OBFS" = "y" ]; then
     read -p "请输入混淆密码: " OBFS_PASSWORD
-    # [FIX v1.6] Use proper multi-line string assignment for YAML
     OBFS_CONFIG="obfs:
   type: salamander
   salamander:
@@ -154,7 +156,6 @@ configure_hysteria() {
 
   read -p "是否开启协议嗅探 (Sniffing)? [y/N]: " ENABLE_SNIFF
   SNIFF_CONFIG=""
-  # [FIX v1.6] Use proper multi-line string assignment for YAML
   [ "$ENABLE_SNIFF" = "y" ] && SNIFF_CONFIG="sniff:\n  enabled: true"
 
   clear
@@ -174,7 +175,6 @@ configure_hysteria() {
     1)
       read -p "请输入您的域名: " CERT_DOMAIN
       read -p "请输入您的邮箱: " CERT_EMAIL
-      # [FIX v1.6] Use proper multi-line string assignment for YAML
       ACME_CONFIG="acme:
   domains:
     - ${CERT_DOMAIN}
@@ -188,7 +188,6 @@ configure_hysteria() {
       openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
         -keyout "${HY2_DIR}/server.key" -out "${HY2_DIR}/server.crt" \
         -subj "/CN=${CERT_CN}" -days 3650
-      # [FIX v1.6] Use proper multi-line string assignment for YAML
       TLS_CONFIG="tls:
   cert: ${HY2_DIR}/server.crt
   key: ${HY2_DIR}/server.key"
@@ -199,7 +198,6 @@ configure_hysteria() {
       read -p "请输入证书文件 (.crt) 的完整路径: " CERT_PATH
       read -p "请输入私钥文件 (.key) 的完整路径: " KEY_PATH
       read -p "请输入您的域名 (用于 SNI): " CERT_DOMAIN
-      # [FIX v1.6] Use proper multi-line string assignment for YAML
       TLS_CONFIG="tls:
   cert: ${CERT_PATH}
   key: ${KEY_PATH}"
