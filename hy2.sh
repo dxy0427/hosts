@@ -1,6 +1,7 @@
 #!/bin/sh
 
-# Hysteria 2 Management Script for Alpine Linux (v1.3)
+# Hysteria 2 Management Script for Alpine Linux (v1.4)
+# FIX: Correctly parse download URL by excluding AVX builds.
 
 # --- Formatting ---
 C_RED='\033[0;31m'
@@ -77,7 +78,8 @@ install_hysteria() {
   case $choice in
     1)
       print_info "正在获取最新版本信息..."
-      DOWNLOAD_URL=$(curl -s $LATEST_RELEASE_URL | grep "browser_download_url" | grep "hysteria-linux-amd64" | cut -d '"' -f 4)
+      # [FIX v1.4] Exclude "avx" builds to get the correct single URL.
+      DOWNLOAD_URL=$(curl -s $LATEST_RELEASE_URL | grep "browser_download_url" | grep "hysteria-linux-amd64" | grep -v "avx" | cut -d '"' -f 4)
       if [ -z "$DOWNLOAD_URL" ]; then
         print_error "无法获取最新版本下载地址，请检查网络或稍后再试。"
         press_any_key
@@ -357,7 +359,7 @@ main_menu() {
     print_info "  Hysteria 2 一站式管理脚本 (Alpine)"
     echo "========================================"
     if [ -f "$HY2_BIN_FILE" ]; then
-        VERSION=$("$HY2_BIN_FILE" version | grep Version | awk '{print $2}')
+        VERSION=$("$HY2_BIN_FILE" version 2>/dev/null | grep Version | awk '{print $2}')
         print_success "  已安装版本: $VERSION"
     else
         print_warning "  状态: Hysteria 尚未安装"
