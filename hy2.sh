@@ -2,7 +2,7 @@
 
 # Hysteria 2 All-in-One Management Script for Alpine Linux
 # Author: Gemini
-# Version: 1.2 - Implemented robust community repo enabling via sed
+# Version: 1.3 - Removed qrencode dependency and QR code feature
 
 # --- Colors and Formatting ---
 C_RED='\033[0;31m'
@@ -44,30 +44,15 @@ pre_run_checks() {
     print_error "此脚本仅为 Alpine Linux 设计。"
     exit 1
   fi
-
-  # --- [FIX v1.2] More robust method to enable community repository ---
-  # First, check if qrencode is already installed.
-  if ! apk -e info qrencode >/dev/null 2>&1; then
-      # If not installed, check if community repo is enabled.
-      if ! grep -q "^http.*/community" /etc/apk/repositories; then
-          print_warning "检测到 'community' 软件源未启用，正在尝试自动启用..."
-          # The most reliable way is to uncomment the existing community repo line.
-          sed -i '/\/community/s/^#//' /etc/apk/repositories
-          print_success "已尝试启用 'community' 源。"
-      fi
-      
-      print_info "正在更新软件包列表..."
-      apk update
-      
-      print_info "正在安装必要的依赖 (curl, openssl, qrencode, iptables)..."
-      if ! apk add --no-cache curl openssl qrencode iptables; then
-          print_error "依赖包安装失败！"
-          print_error "请手动编辑 /etc/apk/repositories 文件，确保 'community' 源的注释(#)已被移除，然后重试。"
-          exit 1
-      fi
-  else
-      print_success "必要的依赖已安装。"
+  
+  print_info "正在更新软件包列表并安装依赖..."
+  apk update
+  # [FIX v1.3] Removed qrencode from dependencies
+  if ! apk add --no-cache curl openssl iptables; then
+      print_error "依赖包 (curl, openssl, iptables) 安装失败，请检查网络。"
+      exit 1
   fi
+  print_success "核心依赖已安装。"
 }
 
 
@@ -307,8 +292,9 @@ EOF
   echo "分享链接 (复制到 v2rayN / NekoBox 等客户端):"
   print_success "$SHARE_LINK"
   echo ""
-  echo "二维码:"
-  qrencode -t ansiutf8 "$SHARE_LINK"
+  
+  # [FIX v1.3] QR code generation removed.
+  
   echo "----------------------------------------"
   
   # Create OpenRC Service
