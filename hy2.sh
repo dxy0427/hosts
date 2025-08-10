@@ -2,7 +2,7 @@
 
 # Hysteria 2 All-in-One Management Script for Alpine Linux
 # Author: Gemini
-# Version: 1.0
+# Version: 1.1 - Added auto-enable for community repository
 
 # --- Colors and Formatting ---
 C_RED='\033[0;31m'
@@ -45,7 +45,17 @@ pre_run_checks() {
     exit 1
   fi
 
-  print_info "正在检查并安装必要的依赖..."
+  # --- [FIX] Check and enable community repository ---
+  if ! grep -q "^http.*/community" /etc/apk/repositories; then
+      print_warning "检测到 'community' 软件源未启用，正在为您添加..."
+      # Get major/minor version (e.g., v3.19)
+      ALPINE_VERSION=$(. /etc/os-release && echo "$VERSION_ID" | awk -F. '{print $1"."$2}')
+      echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >> /etc/apk/repositories
+      print_success "'community' 软件源已添加。"
+  fi
+
+  print_info "正在更新软件包列表并安装依赖..."
+  # Run update *after* potentially adding the new repo
   apk update
   if ! apk add --no-cache curl openssl qrencode iptables; then
     print_error "依赖包安装失败，请检查您的网络和 apk 配置。"
@@ -57,9 +67,10 @@ pre_run_checks() {
 create_shortcut() {
     if [ ! -f "$MANAGER_SHORTCUT" ]; then
         print_info "正在创建快捷命令 'hy2'..."
+        # Use a reliable download source for the shortcut
         cat << EOF > "$MANAGER_SHORTCUT"
 #!/bin/sh
-wget -O hy2.sh https://gist.githubusercontent.com/MoeClub/c64c126b3b2413e5a781f44b415a13c3/raw/hysteria2-alpine-manager.sh && sh hy2.sh
+wget -O /tmp/hy2.sh https://gist.githubusercontent.com/MoeClub/c64c126b3b2413e5a781f44b415a13c3/raw/hysteria2-alpine-manager.sh && sh /tmp/hy2.sh
 EOF
         chmod +x "$MANAGER_SHORTCUT"
         print_success "快捷命令 'hy2' 已创建。您现在可以随时输入 'hy2' 来运行此脚本。"
@@ -162,7 +173,7 @@ configure_hysteria() {
   # Gather user input
   read -p "请输入监听端口 [1-65535]: " LISTEN_PORT
   read -p "请输入认证密码 (留空则随机生成): " AUTH_PASSWORD
-  [ -z "$AUTH_PASSWORD" ] && AUTH_PASSWORD=$(head -c 16 /dev/urandom | base64)
+  [ -z "$AUTH_PASSWORD" ] && AUTH_PASSWORD=$(head -c 16 /dev/urandom | base64 | tr -d '=+/' )
   read -p "请输入伪装的 URL (例如: https://bing.com): " MASQUERADE_URL
   
   # Advanced options
@@ -175,7 +186,9 @@ configure_hysteria() {
   if [ "$ENABLE_OBFS" = "y" ]; then
     read -p "请输入混淆密码: " OBFS_PASSWORD
     OBFS_CONFIG="obfs:\n  type: salamander\n  salamander:\n    password: ${OBFS_PASSWORD}"
-    OBFS_SCHEME="&obfs=salamander&obfs-password=$(echo -n "$OBFS_PASSWORD" | xxd -p | tr -d '\n')"
+    # URL encode the obfs password
+    OBFS_PASS_ENCODED=$(echo -n "$OBFS_PASSWORD" | xxd -p | tr -d '\n')
+    OBFS_SCHEME="&obfs=salamander&obfs-password=${OBFS_PASS_ENCODED}"
   fi
 
   read -p "是否开启协议嗅探 (Sniffing)? [y/N]: " ENABLE_SNIFF
@@ -280,7 +293,7 @@ EOF
   print_info "客户端配置信息"
   echo "----------------------------------------"
   # URL encode password
-  URL_ENCODED_PASS=$(echo -n "$AUTH_PASSWORD" | xxd -p | tr -d '\n' | sed 's/\(..\)/%\1/g')
+  URL_ENCODED_PASS=$(echo -n "$AUTH_PASSWORD" | xxd -p -c 256 | tr -d '\n' | sed 's/\(..\)/%\1/g')
   SHARE_LINK="hysteria2://${URL_ENCODED_PASS}@${SERVER_NAME}:${LISTEN_PORT}?sni=${SNI}&insecure=${INSECURE}${OBFS_SCHEME}${JUMP_PORTS_SCHEME}#Alpine-HY2"
   
   echo "分享链接 (复制到 v2rayN / NekoBox 等客户端):"
