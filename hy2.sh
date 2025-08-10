@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Hysteria 2 Management Script for Alpine Linux (v1.7)
-# FIX: Add validation for masquerade URL input to prevent empty value.
+# Hysteria 2 Management Script for Alpine Linux (v1.8)
+# FIX: Automatically wrap IPv6 server addresses in square brackets for correct URL parsing.
 
 # --- Formatting ---
 C_RED='\033[0;31m'
@@ -134,7 +134,6 @@ configure_hysteria() {
   read -p "请输入认证密码 (留空则随机生成): " AUTH_PASSWORD
   [ -z "$AUTH_PASSWORD" ] && AUTH_PASSWORD=$(head -c 16 /dev/urandom | base64 | tr -d '=+/' )
   
-  # [FIX v1.7] Add input validation and default value for masquerade URL.
   read -p "请输入伪装的 URL (默认: https://bing.com): " MASQUERADE_URL
   [ -z "$MASQUERADE_URL" ] && MASQUERADE_URL="https://bing.com"
 
@@ -169,7 +168,8 @@ configure_hysteria() {
   TLS_CONFIG=""
   INSECURE="0"
   SNI=""
-  SERVER_NAME=""
+  SERVER_NAME_RAW=""
+  SERVER_NAME_FOR_URL=""
 
   case $cert_choice in
     1)
@@ -179,7 +179,7 @@ configure_hysteria() {
   domains:
     - ${CERT_DOMAIN}
   email: ${CERT_EMAIL}"
-      SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
+      SNI="$CERT_DOMAIN"; SERVER_NAME_RAW="$CERT_DOMAIN"
       ;;
     2)
       read -p "请输入用于证书的域名 (默认 bing.com): " CERT_CN
@@ -192,7 +192,7 @@ configure_hysteria() {
   cert: ${HY2_DIR}/server.crt
   key: ${HY2_DIR}/server.key"
       INSECURE="1"; SNI="$CERT_CN"
-      read -p "请输入服务器的 IP 地址或域名 (用于客户端连接): " SERVER_NAME
+      read -p "请输入服务器的 IP 地址或域名 (用于客户端连接): " SERVER_NAME_RAW
       ;;
     3)
       read -p "请输入证书文件 (.crt) 的完整路径: " CERT_PATH
@@ -201,10 +201,17 @@ configure_hysteria() {
       TLS_CONFIG="tls:
   cert: ${CERT_PATH}
   key: ${KEY_PATH}"
-      SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
+      SNI="$CERT_DOMAIN"; SERVER_NAME_RAW="$CERT_DOMAIN"
       ;;
     *) print_error "无效选择，配置中止。"; press_any_key; return ;;
   esac
+
+  # [FIX v1.8] Check if the server address is IPv6 and wrap it in brackets.
+  if echo "$SERVER_NAME_RAW" | grep -q ":"; then
+    SERVER_NAME_FOR_URL="[${SERVER_NAME_RAW}]"
+  else
+    SERVER_NAME_FOR_URL="$SERVER_NAME_RAW"
+  fi
 
   read -p "是否开启端口跳跃 (Port Hopping)? [y/N]: " ENABLE_PORT_HOPPING
   JUMP_PORTS_SCHEME=""
@@ -249,7 +256,7 @@ EOF
   clear
   print_info "客户端配置信息"
   URL_ENCODED_PASS=$(echo -n "$AUTH_PASSWORD" | xxd -p -c 256 | tr -d '\n' | sed 's/\(..\)/%\1/g')
-  SHARE_LINK="hysteria2://${URL_ENCODED_PASS}@${SERVER_NAME}:${LISTEN_PORT}?sni=${SNI}&insecure=${INSECURE}${OBFS_SCHEME}${JUMP_PORTS_SCHEME}#Alpine-HY2"
+  SHARE_LINK="hysteria2://${URL_ENCODED_PASS}@${SERVER_NAME_FOR_URL}:${LISTEN_PORT}?sni=${SNI}&insecure=${INSECURE}${OBFS_SCHEME}${JUMP_PORTS_SCHEME}#Alpine-HY2"
   echo "----------------------------------------"
   print_success "$SHARE_LINK"
   echo "----------------------------------------"
