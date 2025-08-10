@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Hysteria 2 Management Script for Alpine Linux (v1.4)
-# FIX: Correctly parse download URL by excluding AVX builds.
+# Hysteria 2 Management Script for Alpine Linux (v1.5)
+# FIX: Use the stable redirect URL for latest version download.
 
 # --- Formatting ---
 C_RED='\033[0;31m'
@@ -17,7 +17,6 @@ HY2_BIN_FILE="/usr/local/bin/hysteria"
 HY2_SERVICE_FILE="/etc/init.d/hysteria"
 MANAGER_SHORTCUT="/usr/local/bin/hy2"
 IPTABLES_CLEANUP_SCRIPT="${HY2_DIR}/cleanup_iptables.sh"
-LATEST_RELEASE_URL="https://api.github.com/repos/apernet/hysteria/releases/latest"
 
 # --- Utility Functions ---
 print_error() { echo -e "${C_RED}错误: $1${C_NC}"; }
@@ -77,14 +76,8 @@ install_hysteria() {
 
   case $choice in
     1)
-      print_info "正在获取最新版本信息..."
-      # [FIX v1.4] Exclude "avx" builds to get the correct single URL.
-      DOWNLOAD_URL=$(curl -s $LATEST_RELEASE_URL | grep "browser_download_url" | grep "hysteria-linux-amd64" | grep -v "avx" | cut -d '"' -f 4)
-      if [ -z "$DOWNLOAD_URL" ]; then
-        print_error "无法获取最新版本下载地址，请检查网络或稍后再试。"
-        press_any_key
-        return
-      fi
+      # [FIX v1.5] Use the stable redirect URL as requested. This is more reliable.
+      DOWNLOAD_URL="https://download.hysteria.network/app/latest/hysteria-linux-amd64"
       ;;
     2)
       read -p "请输入您想安装的版本号 (例如: 2.3.1): v" version
@@ -113,7 +106,6 @@ install_hysteria() {
 uninstall_hysteria() {
   clear
   print_warning "您确定要完全卸载 Hysteria 2 吗？"
-  print_warning "这将删除所有配置文件、服务、证书和端口跳跃规则。"
   read -p "请输入 'yes' 来确认: " confirmation
 
   if [ "$confirmation" != "yes" ]; then
@@ -122,28 +114,13 @@ uninstall_hysteria() {
     return
   fi
 
-  print_info "正在停止并禁用 Hysteria 服务..."
-  if [ -f "$HY2_SERVICE_FILE" ]; then
-    rc-service hysteria stop
-    rc-update del hysteria default
-  fi
-
-  print_info "正在执行端口跳跃清理脚本..."
-  if [ -f "$IPTABLES_CLEANUP_SCRIPT" ]; then
-    sh "$IPTABLES_CLEANUP_SCRIPT"
-  fi
-
-  print_info "正在删除所有相关文件..."
-  rm -f "$HY2_BIN_FILE"
-  rm -f "$HY2_SERVICE_FILE"
+  if [ -f "$HY2_SERVICE_FILE" ]; then rc-service hysteria stop; rc-update del hysteria default; fi
+  if [ -f "$IPTABLES_CLEANUP_SCRIPT" ]; then sh "$IPTABLES_CLEANUP_SCRIPT"; fi
+  rm -f "$HY2_BIN_FILE" "$HY2_SERVICE_FILE"
   rm -rf "$HY2_DIR"
   
-  print_warning "您想要删除 'hy2' 快捷命令吗?"
-  read -p "[y/N]: " del_shortcut
-  if [ "$del_shortcut" = "y" ] || [ "$del_shortcut" = "Y" ]; then
-      rm -f "$MANAGER_SHORTCUT"
-      print_info "快捷命令已删除。"
-  fi
+  read -p "是否删除 'hy2' 快捷命令? [y/N]: " del_shortcut
+  if [ "$del_shortcut" = "y" ] || [ "$del_shortcut" = "Y" ]; then rm -f "$MANAGER_SHORTCUT"; fi
 
   print_success "Hysteria 2 已被完全卸载。"
   press_any_key
@@ -178,8 +155,8 @@ configure_hysteria() {
 
   clear
   print_info "请选择证书类型:"
-  echo "1. 自动申请证书 (ACME / Let's Encrypt, 需要一个域名)"
-  echo "2. 生成自签名证书 (无需域名)"
+  echo "1. 自动申请证书 (ACME)"
+  echo "2. 生成自签名证书"
   echo "3. 使用现有的证书文件"
   read -p "请输入您的选择: " cert_choice
   
@@ -194,8 +171,7 @@ configure_hysteria() {
       read -p "请输入您的域名: " CERT_DOMAIN
       read -p "请输入您的邮箱: " CERT_EMAIL
       ACME_CONFIG="acme:\n  domains:\n    - ${CERT_DOMAIN}\n  email: ${CERT_EMAIL}"
-      SNI="$CERT_DOMAIN"
-      SERVER_NAME="$CERT_DOMAIN"
+      SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
       ;;
     2)
       read -p "请输入用于证书的域名 (默认 bing.com): " CERT_CN
@@ -205,8 +181,7 @@ configure_hysteria() {
         -keyout "${HY2_DIR}/server.key" -out "${HY2_DIR}/server.crt" \
         -subj "/CN=${CERT_CN}" -days 3650
       TLS_CONFIG="tls:\n  cert: ${HY2_DIR}/server.crt\n  key: ${HY2_DIR}/server.key"
-      INSECURE="1"
-      SNI="$CERT_CN"
+      INSECURE="1"; SNI="$CERT_CN"
       read -p "请输入服务器的 IP 地址或域名 (用于客户端连接): " SERVER_NAME
       ;;
     3)
@@ -214,8 +189,7 @@ configure_hysteria() {
       read -p "请输入私钥文件 (.key) 的完整路径: " KEY_PATH
       read -p "请输入您的域名 (用于 SNI): " CERT_DOMAIN
       TLS_CONFIG="tls:\n  cert: ${CERT_PATH}\n  key: ${KEY_PATH}"
-      SNI="$CERT_DOMAIN"
-      SERVER_NAME="$CERT_DOMAIN"
+      SNI="$CERT_DOMAIN"; SERVER_NAME="$CERT_DOMAIN"
       ;;
     *) print_error "无效选择，配置中止。"; press_any_key; return ;;
   esac
@@ -228,12 +202,10 @@ configure_hysteria() {
     read -p "请输入起始端口: " START_PORT
     read -p "请输入结束端口: " END_PORT
     
-    print_info "正在配置 iptables 规则..."
     iptables -t nat -A PREROUTING -i "$IFACE" -p udp --dport "${START_PORT}:${END_PORT}" -j REDIRECT --to-ports "$LISTEN_PORT"
     echo "#!/bin/sh" > "$IPTABLES_CLEANUP_SCRIPT"
     echo "iptables -t nat -D PREROUTING -i \"$IFACE\" -p udp --dport \"${START_PORT}:${END_PORT}\" -j REDIRECT --to-ports \"$LISTEN_PORT\"" >> "$IPTABLES_CLEANUP_SCRIPT"
     chmod +x "$IPTABLES_CLEANUP_SCRIPT"
-    print_success "iptables 规则已添加，清理脚本已创建。"
     JUMP_PORTS_SCHEME="&mport=${START_PORT}-${END_PORT}"
   fi
 
@@ -255,15 +227,13 @@ ${OBFS_CONFIG}
 ${SNIFF_CONFIG}
 EOF
 
-  print_success "配置文件已生成到 $HY2_CONFIG_FILE"
+  print_success "配置文件已生成。"
   
   clear
   print_info "客户端配置信息"
-  echo "----------------------------------------"
   URL_ENCODED_PASS=$(echo -n "$AUTH_PASSWORD" | xxd -p -c 256 | tr -d '\n' | sed 's/\(..\)/%\1/g')
   SHARE_LINK="hysteria2://${URL_ENCODED_PASS}@${SERVER_NAME}:${LISTEN_PORT}?sni=${SNI}&insecure=${INSECURE}${OBFS_SCHEME}${JUMP_PORTS_SCHEME}#Alpine-HY2"
-  
-  echo "分享链接 (复制到 v2rayN / NekoBox 等客户端):"
+  echo "----------------------------------------"
   print_success "$SHARE_LINK"
   echo "----------------------------------------"
   
@@ -272,7 +242,6 @@ EOF
 }
 
 create_openrc_service() {
-    print_info "正在创建 OpenRC 启动脚本..."
     cat << EOF > "$HY2_SERVICE_FILE"
 #!/sbin/openrc-run
 name="hysteria"
@@ -280,14 +249,9 @@ command="${HY2_BIN_FILE}"
 command_args="server --config ${HY2_CONFIG_FILE}"
 command_background="yes"
 pidfile="/run/\${RC_SVCNAME}.pid"
-depend() {
-  need net
-  after net
-}
+depend() { need net; after net; }
 EOF
     chmod +x "$HY2_SERVICE_FILE"
-    
-    print_info "正在启用并重启 Hysteria 服务..."
     rc-update add hysteria default
     rc-service hysteria restart
     sleep 2
@@ -295,69 +259,39 @@ EOF
 }
 
 manage_service() {
-  if [ ! -f "$HY2_BIN_FILE" ]; then
-    print_error "Hysteria 尚未安装。"
-    press_any_key
-    return
-  fi
-
+  if [ ! -f "$HY2_BIN_FILE" ]; then print_error "Hysteria 尚未安装。"; press_any_key; return; fi
   while true; do
-    clear
-    print_info "Hysteria 2 服务管理"
-    echo "----------------------------------------"
-    echo "1. 启动服务"
-    echo "2. 停止服务"
-    echo "3. 重启服务"
-    echo "4. 查看状态"
-    echo "5. 查看日志"
-    echo "6. 查看版本"
-    echo "0. 返回主菜单"
-    echo "----------------------------------------"
+    clear; print_info "Hysteria 2 服务管理"
+    echo "1. 启动  2. 停止  3. 重启  4. 状态  5. 日志  6. 版本  0. 返回"
     read -p "请输入您的选择: " choice
-
     case $choice in
       1) rc-service hysteria start ;;
       2) rc-service hysteria stop ;;
       3) rc-service hysteria restart ;;
       4) rc-service hysteria status ;;
-      5) print_warning "正在显示相关日志 (按 Ctrl+C 退出)..." ; sleep 1; tail -f /var/log/messages | grep hysteria ;;
+      5) tail -f /var/log/messages | grep hysteria ;;
       6) "$HY2_BIN_FILE" version ;;
       0) break ;;
-      *) print_error "无效输入" ;;
     esac
     [ "$choice" != "5" ] && press_any_key
   done
 }
 
 optimize_performance() {
-  clear
-  print_info "性能优化"
-  print_warning "此功能将下载并运行来自 'ylx2016' 的 'Linux-NetSpeed' 脚本。"
-  print_warning "它会提供更换内核（如BBR、Xanmod）等功能，请确保您了解其作用。"
-  read -p "是否继续? [y/N]: " choice
-  if [ "$choice" = "y" ] || [ "$choice" = "Y" ]; then
-    wget -O tcpx.sh "https://github.com/ylx2016/Linux-NetSpeed/raw/master/tcpx.sh"
-    chmod +x tcpx.sh
-    ./tcpx.sh
-  else
-    print_info "操作已取消。"
+  read -p "此功能将运行'ylx2016'的'Linux-NetSpeed'脚本, 是否继续? [y/N]: " choice
+  if [ "$choice" = "y" ]; then
+    wget -O tcpx.sh "https://github.com/ylx2016/Linux-NetSpeed/raw/master/tcpx.sh" && chmod +x tcpx.sh && ./tcpx.sh
   fi
   press_any_key
 }
 
 # --- Main Menu ---
 main_menu() {
-  if [ -z "$PRE_CHECKS_DONE" ]; then
-      pre_run_checks
-      create_shortcut
-      export PRE_CHECKS_DONE=1
-  fi
-  
+  [ -z "$PRE_CHECKS_DONE" ] && pre_run_checks && create_shortcut && export PRE_CHECKS_DONE=1
   while true; do
     clear
     echo "========================================"
     print_info "  Hysteria 2 一站式管理脚本 (Alpine)"
-    echo "========================================"
     if [ -f "$HY2_BIN_FILE" ]; then
         VERSION=$("$HY2_BIN_FILE" version 2>/dev/null | grep Version | awk '{print $2}')
         print_success "  已安装版本: $VERSION"
@@ -365,13 +299,7 @@ main_menu() {
         print_warning "  状态: Hysteria 尚未安装"
     fi
     echo "----------------------------------------"
-    echo "1. 安装 / 更新 Hysteria 2"
-    echo "2. 卸载 Hysteria 2"
-    echo "3. 配置 Hysteria 2 (会覆盖现有配置)"
-    echo "4. 服务管理"
-    echo "5. 性能优化 (BBR/Xanmod 内核)"
-    echo "0. 退出脚本"
-    echo "----------------------------------------"
+    echo "1. 安装/更新   2. 卸载   3. 配置   4. 服务管理   5. 性能优化   0. 退出"
     read -p "请输入您的选择: " choice
 
     case $choice in
@@ -381,7 +309,6 @@ main_menu() {
       4) manage_service ;;
       5) optimize_performance ;;
       0) exit 0 ;;
-      *) print_error "无效输入" ; press_any_key ;;
     esac
   done
 }
