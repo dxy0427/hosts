@@ -2,7 +2,7 @@
 
 # Hysteria 2 All-in-One Management Script for Alpine Linux
 # Author: Gemini
-# Version: 1.1 - Added auto-enable for community repository
+# Version: 1.2 - Implemented robust community repo enabling via sed
 
 # --- Colors and Formatting ---
 C_RED='\033[0;31m'
@@ -45,23 +45,31 @@ pre_run_checks() {
     exit 1
   fi
 
-  # --- [FIX] Check and enable community repository ---
-  if ! grep -q "^http.*/community" /etc/apk/repositories; then
-      print_warning "检测到 'community' 软件源未启用，正在为您添加..."
-      # Get major/minor version (e.g., v3.19)
-      ALPINE_VERSION=$(. /etc/os-release && echo "$VERSION_ID" | awk -F. '{print $1"."$2}')
-      echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/community" >> /etc/apk/repositories
-      print_success "'community' 软件源已添加。"
-  fi
-
-  print_info "正在更新软件包列表并安装依赖..."
-  # Run update *after* potentially adding the new repo
-  apk update
-  if ! apk add --no-cache curl openssl qrencode iptables; then
-    print_error "依赖包安装失败，请检查您的网络和 apk 配置。"
-    exit 1
+  # --- [FIX v1.2] More robust method to enable community repository ---
+  # First, check if qrencode is already installed.
+  if ! apk -e info qrencode >/dev/null 2>&1; then
+      # If not installed, check if community repo is enabled.
+      if ! grep -q "^http.*/community" /etc/apk/repositories; then
+          print_warning "检测到 'community' 软件源未启用，正在尝试自动启用..."
+          # The most reliable way is to uncomment the existing community repo line.
+          sed -i '/\/community/s/^#//' /etc/apk/repositories
+          print_success "已尝试启用 'community' 源。"
+      fi
+      
+      print_info "正在更新软件包列表..."
+      apk update
+      
+      print_info "正在安装必要的依赖 (curl, openssl, qrencode, iptables)..."
+      if ! apk add --no-cache curl openssl qrencode iptables; then
+          print_error "依赖包安装失败！"
+          print_error "请手动编辑 /etc/apk/repositories 文件，确保 'community' 源的注释(#)已被移除，然后重试。"
+          exit 1
+      fi
+  else
+      print_success "必要的依赖已安装。"
   fi
 }
+
 
 # Create a shortcut for this manager script
 create_shortcut() {
