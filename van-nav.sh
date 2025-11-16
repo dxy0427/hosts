@@ -1,13 +1,13 @@
 #!/bin/bash
 CUR_USER=$(whoami)
-DOMAIN_DIR=$(ls ~/domains/ 2>/dev/null | head -n 1)
+DOMAIN_DIR=$(ls /usr/home/$CUR_USER/domains/ 2>/dev/null | head -n 1)
 
 if [ -z "$CUR_USER" ]; then
     echo "❌ 错误：无法获取当前用户名！"
     exit 1
 fi
-if [ -z "$DOMAIN_DIR" ] || [ ! -d "~/domains/$DOMAIN_DIR" ]; then
-    echo "❌ 错误：无法找到~/domains下的域名文件夹！"
+if [ -z "$DOMAIN_DIR" ] || [ ! -d "/usr/home/$CUR_USER/domains/$DOMAIN_DIR" ]; then
+    echo "❌ 错误：无法找到/usr/home/$CUR_USER/domains下的域名文件夹！"
     exit 1
 fi
 
