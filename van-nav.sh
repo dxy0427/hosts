@@ -1,6 +1,6 @@
 #!/bin/bash
-WORK_DIR="/usr/home/$(whoami)/domains/qqmm.serv00.net/public_html/van-nav"
-NAV_PATH="$WORK_DIR/van-nav"
+WORK_DIR="/usr/home/$(whoami)/domains/qqmm.serv00.net/public_html/van-nav/van-nav-gai"
+NAV_PATH="$WORK_DIR/van-nav-gai"
 LOG_FILE="$WORK_DIR/restart_log.txt"
 PORT_FILE="$WORK_DIR/nav_port.conf"
 
