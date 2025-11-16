@@ -1,25 +1,14 @@
 #!/bin/bash
-CUR_USER=$(whoami)
-DOMAIN_DIR=$(ls /usr/home/$CUR_USER/domains/ 2>/dev/null | head -n 1)
-
-if [ -z "$CUR_USER" ]; then
-    echo "❌ 错误：无法获取当前用户名！"
-    exit 1
-fi
-if [ -z "$DOMAIN_DIR" ] || [ ! -d "/usr/home/$CUR_USER/domains/$DOMAIN_DIR" ]; then
-    echo "❌ 错误：无法找到/usr/home/$CUR_USER/domains下的域名文件夹！"
-    exit 1
-fi
-
-WORK_DIR="/usr/home/$CUR_USER/domains/$DOMAIN_DIR/public_html/van-nav"
+WORK_DIR="/usr/home/qqmm/domains/qqmm.serv00.net/public_html/van-nav"
 NAV_PATH="$WORK_DIR/van-nav-gai"
 LOG_FILE="$WORK_DIR/restart_log.txt"
 PORT_FILE="$WORK_DIR/nav_port.conf"
 
 if [ ! -d "$WORK_DIR" ]; then
-    echo "❌ 错误：目录 $WORK_DIR 不存在，请检查路径！"
+    echo "❌ 错误：目录 $WORK_DIR 不存在！"
     exit 1
 fi
+
 if [ ! -x "$NAV_PATH" ]; then
     echo "❌ 错误：程序 $NAV_PATH 不存在或无执行权限！"
     exit 1
