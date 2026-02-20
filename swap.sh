@@ -1,175 +1,232 @@
 #!/bin/bash
 
-# --- 颜色定义 ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # 无颜色
-
-# --- 全局变量 ---
-SWAP_FILE="/swapfile"
-
-# --- 函数定义 ---
-
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-       echo -e "${RED}错误：此脚本需要root权限运行。请使用sudo执行。${NC}"
-       exit 1
-    fi
-}
-
-check_swap_status() {
-    echo -e "\n${YELLOW}--- 当前Swap状态 ---${NC}"
-    swapon --show
-    echo -e "\n${YELLOW}--- 内存使用情况 ---${NC}"
-    free -h
-    echo -e "\n${YELLOW}--- 根目录磁盘空间 ---${NC}"
-    df -h /
-}
-
-# 优化sysctl配置的函数
-# 参数1: key (e.g., vm.swappiness)
-# 参数2: value (e.g., 10)
-update_sysctl() {
-    local key=$1
-    local value=$2
-    # 如果key已存在, 则修改它; 否则, 添加它
-    if grep -q "^${key}" /etc/sysctl.conf; then
-        sed -i "s/^${key}.*/${key} = ${value}/" /etc/sysctl.conf
+# ====================== 辅助函数 ======================
+format_size() {
+    local size_mb=$1
+    if [ "$size_mb" -ge 1024 ]; then
+        awk "BEGIN {printf \"%.1fG\", $size_mb/1024}"
     else
-        echo "${key} = ${value}" >> /etc/sysctl.conf
+        echo "${size_mb}MB"
     fi
 }
 
-create_swap() {
-    local size_gb=$1
+# 新增：解析用户输入 (支持 1G, 1024M, 512 等格式)
+parse_size_to_mb() {
+    local input=$(echo "$1" | tr '[:lower:]' '[:upper:]') # 统一转大写
+    local num=$(echo "$input" | tr -dc '0-9')             # 提取纯数字
+    local unit=$(echo "$input" | tr -dc 'A-Z')            # 提取单位部分
 
-    if [ -f "$SWAP_FILE" ]; then
-        echo -e "${RED}警告：Swap文件 $SWAP_FILE 已存在！${NC}"
-        read -p "是否删除现有Swap并创建新的？(y/n) " answer
-        # 将输入转为小写进行比较，增强用户体验
-        if [[ "${answer,,}" != "y" ]]; then
-            echo "操作已取消。"
-            return
+    # 如果没有数字，返回错误
+    if [ -z "$num" ]; then echo "0"; return; fi
+
+    # 根据单位转换
+    case "$unit" in
+        G|GB) echo $((num * 1024)) ;;
+        M|MB|"") echo "$num" ;;      # 无单位默认为 MB
+        *) echo "-1" ;;              # -1 代表单位无法识别
+    esac
+}
+
+check_disk_space_mb() {
+    local required_mb=$1
+    local avail_kb=$(df / | awk 'NR==2 {print $4}')
+    local avail_mb=$((avail_kb / 1024))
+    
+    if [ $avail_mb -lt $required_mb ]; then
+        echo "❌ 磁盘空间不足！至少需要 $(format_size $required_mb)，当前可用 $(format_size $avail_mb)"
+        return 1
+    fi
+    echo "✅ 磁盘空间充足（可用 $(format_size $avail_mb)）"
+    return 0
+}
+
+get_physical_memory_mb() {
+    grep MemTotal /proc/meminfo | awk '{print int($2/1024)}'
+}
+
+is_btrfs() {
+    if df -T / | awk 'NR==2 {print $2}' | grep -qi btrfs; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+set_swappiness() {
+    local current_val=$(cat /proc/sys/vm/swappiness 2>/dev/null || echo "40")
+    echo -e "\n【Swappiness 设置】"
+    echo "📌 当前系统值: $current_val | 推荐范围: 0-200 (默认40)"
+    echo "💡 说明: 值越高系统越积极使用 Swap (0=尽量不用, 40=保守策略, 100=积极使用)"
+
+    while true; do
+        read -p "👉 请输入 Swappiness 值 (直接回车使用默认 40): " swp_input
+        if [ -z "$swp_input" ]; then
+            swp_input=40
+            break
+        elif [[ "$swp_input" =~ ^[0-9]+$ ]] && [ "$swp_input" -ge 0 ] && [ "$swp_input" -le 200 ]; then
+            break
+        else
+            echo "⚠️ 无效输入！请输入 0-200 之间的整数"
         fi
-        # 在创建前先执行删除操作，确保环境干净
-        delete_swap
+    done
+
+    sed -i '/^vm.swappiness=/d' /etc/sysctl.conf 2>/dev/null
+    echo "vm.swappiness=$swp_input" >> /etc/sysctl.conf
+    sysctl -w vm.swappiness=$swp_input >/dev/null 2>&1
+    sysctl -p >/dev/null 2>&1
+    echo "✅ Swappiness 已设置为: $swp_input"
+}
+
+remove_existing_swap() {
+    if [ -f /swapfile ]; then
+        echo "🔍 检测到现有 Swap 文件..."
+        if swapon --show | grep -q '/swapfile'; then
+            echo "📴 正在禁用 Swap..."
+            swapoff /swapfile || { echo "❌ 禁用失败"; exit 1; }
+        fi
+        rm -f /swapfile
+        sed -i '\|^/swapfile|d' /etc/fstab
+        echo "✅ 已清理现有 Swap 配置"
+    else
+        echo "ℹ️ 未检测到现有 Swap 文件"
+    fi
+}
+
+create_swap_file() {
+    local size_mb=$1
+    echo "⚙️ 正在创建 $(format_size $size_mb) Swap 文件..."
+
+    if is_btrfs; then
+        echo "ℹ️ 检测到 Btrfs，启用 NoCOW 属性"
+        truncate -s 0 /swapfile
+        chattr +C /swapfile
     fi
 
-    # 使用-kP参数确保输出格式一致，便于awk解析
-    local available_kb
-    available_kb=$(df -kP / | tail -1 | awk '{print $4}')
-    local required_kb
-    required_kb=$((size_gb * 1024 * 1024))
-
-    if [ "$available_kb" -lt "$required_kb" ]; then
-        local available_gb=$((available_kb / 1024 / 1024))
-        echo -e "${RED}错误：磁盘空间不足！需要 ${size_gb}GB，但根目录仅可用 ${available_gb}GB。${NC}"
-        exit 1
-    fi
-
-    echo -e "${YELLOW}正在创建 ${size_gb}GB Swap文件...（这可能需要一些时间）${NC}"
-    # 优先使用fallocate快速创建文件，如果失败则回退到dd，以增强兼容性
-    fallocate -l "${size_gb}G" "$SWAP_FILE"
-    if [ $? -ne 0 ]; then
-        echo -e "${YELLOW}fallocate失败，尝试使用dd... (这会更慢)${NC}"
-        dd if=/dev/zero of="$SWAP_FILE" bs=1G count="$size_gb" status=progress || {
-            echo -e "${RED}使用dd创建Swap文件失败！${NC}"
-            rm -f "$SWAP_FILE" # 清理失败创建的文件
+    if ! fallocate -l ${size_mb}M /swapfile 2>/dev/null; then
+        echo "ℹ️ fallocate 不可用，使用 dd 创建"
+        dd if=/dev/zero of=/swapfile bs=1M count=$size_mb status=none || {
+            echo "❌ dd 创建失败"
+            rm -f /swapfile
             exit 1
         }
     fi
 
-    chmod 600 "$SWAP_FILE"
-    mkswap "$SWAP_FILE" || { echo -e "${RED}格式化Swap文件失败！${NC}"; exit 1; }
-    swapon "$SWAP_FILE" || { echo -e "${RED}启用Swap失败！${NC}"; exit 1; }
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null 2>&1
+    swapon /swapfile || { echo "❌ 启用 Swap 失败"; exit 1; }
 
-    # 添加到fstab以实现开机自启
-    if ! grep -q "$SWAP_FILE" /etc/fstab; then
-        echo -e "${YELLOW}正在更新 /etc/fstab...${NC}"
-        echo "$SWAP_FILE none swap defaults 0 0" >> /etc/fstab
+    if ! grep -q "^/swapfile" /etc/fstab; then
+        echo "/swapfile none swap defaults 0 0" >> /etc/fstab
     fi
 
-    # 使用辅助函数来安全地更新或添加配置
-    echo -e "${YELLOW}正在优化系统内存参数...${NC}"
-    update_sysctl "vm.swappiness" "10"
-    update_sysctl "vm.vfs_cache_pressure" "50"
-    sysctl -p > /dev/null
-
-    echo -e "${GREEN}✓ ${size_gb}GB Swap设置成功！${NC}"
-    check_swap_status
+    echo "✅ Swap 文件已启用并配置开机自启"
 }
 
-delete_swap() {
-    # 仅当swap文件被激活时才执行swapoff
-    if swapon --show | grep -q "$SWAP_FILE"; then
-        echo -e "${YELLOW}正在禁用Swap...${NC}"
-        swapoff "$SWAP_FILE" || { echo -e "${RED}禁用Swap失败！可能正在被使用。${NC}"; return 1; }
+# ====================== 主功能 ======================
+add_swap_manual() {
+    echo -e "\n【手动添加 Swap】"
+    local mem_mb=$(get_physical_memory_mb)
+    local mem_fmt=$(format_size $mem_mb)
+    local recommended_size=$((mem_mb * 2))
+
+    echo "💡 物理内存: ${mem_fmt} | 建议 Swap: ${mem_fmt} ~ $(format_size $recommended_size)"
+
+    # 修改：支持带单位的输入
+    read -p "👉 请输入 Swap 大小 (支持 1G, 512M 等, 回车默认 $(format_size $recommended_size)): " input_size
+    
+    local size_mb
+    if [ -z "$input_size" ]; then
+        size_mb=$recommended_size
+        echo -e "📌 已自动采用建议值: ${size_mb}MB"
     else
-         echo -e "${YELLOW}Swap文件 $SWAP_FILE 未被激活，将直接清理文件和配置。${NC}"
+        # 调用解析函数
+        size_mb=$(parse_size_to_mb "$input_size")
     fi
 
-    # 从fstab中删除记录
-    if grep -q "$SWAP_FILE" /etc/fstab; then
-        echo -e "${YELLOW}正在从 /etc/fstab 中移除记录...${NC}"
-        sed -i "\|$SWAP_FILE|d" /etc/fstab
+    # 验证解析结果
+    if [ "$size_mb" -eq 0 ] || [ "$size_mb" -eq -1 ]; then
+        echo "⚠️ 输入格式错误！请使用纯数字或带单位 (例如: 1G, 2048M)"
+        return
     fi
+    
+    echo "ℹ️ 目标大小: $(format_size $size_mb)"
 
-    # 删除swap文件本身
-    if [ -f "$SWAP_FILE" ]; then
-        echo -e "${YELLOW}正在删除Swap文件...${NC}"
-        rm "$SWAP_FILE" || { echo -e "${RED}删除Swap文件失败！${NC}"; return 1; }
-    fi
+    if ! check_disk_space_mb $size_mb; then return; fi
+    remove_existing_swap
+    create_swap_file $size_mb
+    set_swappiness
 
-    echo -e "${GREEN}✓ Swap已成功清理！${NC}"
-    check_swap_status
+    show_final_status
 }
 
-main_menu() {
-    while true; do
-        clear
-        echo -e "${GREEN}=========================================${NC}"
-        echo -e "${GREEN}         Swap内存管理脚本 v1.2          ${NC}"
-        echo -e "${GREEN}=========================================${NC}"
-        check_swap_status
-
-        echo -e "\n${YELLOW}请选择操作：${NC}"
-        echo "1. 设置 1GB Swap"
-        echo "2. 设置 2GB Swap"
-        echo "3. 设置 4GB Swap"
-        echo "4. 自定义Swap大小"
-        echo "5. 删除现有Swap"
-        echo "6. 退出"
-
-        read -p "请输入选项 [1-6]: " choice
-
-        case $choice in
-            1) create_swap 1 ;;
-            2) create_swap 2 ;;
-            3) create_swap 4 ;;
-            4)
-                read -p "请输入Swap大小(GB，仅限正整数): " custom_size
-                # 使用正则表达式验证输入，确保是有效的正整数
-                if ! [[ "$custom_size" =~ ^[1-9][0-9]*$ ]]; then
-                    echo -e "${RED}错误：请输入一个有效的正整数！${NC}"
-                else
-                    create_swap "$custom_size"
-                fi
-                ;;
-            5) delete_swap ;;
-            6)
-                echo -e "${GREEN}退出脚本...${NC}"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}无效选项！请输入1-6之间的数字。${NC}"
-                ;;
-        esac
-
-        read -p "按Enter键返回主菜单..."
-    done
+remove_swap_only() {
+    echo -e "\n【删除 Swap】"
+    read -p "⚠️ 确认删除所有 Swap 配置？(默认Y, 回车即确认) [Y/n]: " confirm
+    if [ -z "$confirm" ] || [[ "$confirm" =~ ^[Yy]$ ]]; then
+        remove_existing_swap
+        echo -e "\n✅ Swap 已完全移除！"
+        echo "👋 脚本即将退出..."
+        exit 0
+    else
+        echo -e "\n❌ 操作已取消"
+        sleep 1
+        return
+    fi
 }
 
-# --- 脚本执行入口 ---
-check_root
-main_menu
+auto_swap_setup() {
+    echo -e "\n【自动配置 Swap】"
+    local mem_mb=$(get_physical_memory_mb)
+    local auto_size=$((mem_mb * 2))
+
+    echo "💡 物理内存: $(format_size $mem_mb) | 自动设定: $(format_size $auto_size) (2倍物理内存)"
+
+    if ! check_disk_space_mb $auto_size; then return; fi
+    remove_existing_swap
+    create_swap_file $auto_size
+    set_swappiness
+
+    show_final_status
+}
+
+show_final_status() {
+    echo -e "\n🎉 Swap 配置完成！系统状态如下："
+    echo "========================================"
+    free -h
+    echo "========================================"
+    echo "📌 当前 Swappiness 值: $(cat /proc/sys/vm/swappiness)"
+    echo "========================================"
+    echo ""
+    read -p "👉 按回车键返回主菜单..."
+}
+
+# ====================== 菜单系统 ======================
+show_menu() {
+    clear
+    cat <<EOF
+=======================================
+        🔄 Swap 管理工具 (支持单位)
+=======================================
+1. 添加 Swap          (自定义大小 + Swappiness)
+2. 删除现有 Swap      (回车默认确认删除)
+3. 自动配置 Swap      (物理内存 × 2)
+4. 退出
+=======================================
+EOF
+    read -p "👉 请选择操作 (1-4): " choice
+    case $choice in
+        1) add_swap_manual ;;
+        2) remove_swap_only ;;
+        3) auto_swap_setup ;;
+        4) echo -e "\n👋 感谢使用！"; exit 0 ;;
+        *) echo "⚠️ 无效选项"; sleep 1; ;;
+    esac
+}
+
+# ====================== 启动 ======================
+main() {
+    [ "$EUID" -ne 0 ] && { echo "⚠️ 请使用 sudo 运行"; exit 1; }
+    while true; do show_menu; done
+}
+
+main
